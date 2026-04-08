@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Event Model</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 20px; max-width: 1600px; }
+  h1 { margin-top: 0; }
+  textarea { width: 100%; height: 260px; font-family: ui-monospace, monospace; font-size: 12px; }
+  #diagram { border: 1px solid #ddd; padding: 10px; overflow: auto; background: #fafafa; }
+  #diagram svg { display: block; }
+  button { padding: 6px 14px; font-size: 14px; margin: 8px 0; }
+  .error { color: #b00; white-space: pre-wrap; font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<h1>Event Model</h1>
+<p>Edit the DSL and press Render. Columns are derived from the causal flow, so elements in the same timeline step line up vertically across every lane.</p>
+
+<h3>DSL</h3>
+<textarea id="src"></textarea>
+<div><button id="render">Render</button></div>
+
+<h3>Diagram</h3>
+<div id="diagram"></div>
+
+<script type="module">
+  import { renderEventModel } from './event-model.js';
+
+  // Inlined copy of blueprint_dsl so the page works from file:// without a server.
+  const DEFAULT_SRC = `eventModel
+\tactor Manager
+\tactor Guest
+\taggregate Inventory
+\taggregate Auth
+\taggregate Payment
+\taggregate GPS
+
+\tui:Guest reg_ui["Registration UI"]
+\tcommand Register
+\tdomainEvent:Auth Registered
+
+\treg_ui-->Register
+\tRegister-->Registered
+
+\tui:Manager room_ui["Room Management"]
+\tcommand addRoom["Add Room"]
+\tdomainEvent:Auth ra["Room Added"]
+\treadModel avail["Room Availability"]
+
+\troom_ui-->addRoom
+\taddRoom-->ra
+\tra-->avail
+
+\tui:Guest booking_ui["Booking Screen"]
+\tcommand bookRoom["Book Room"]
+\tdomainEvent:Inventory booked["Room Booked"]
+
+\tavail-->booking_ui
+\tbooking_ui-->bookRoom
+\tbookRoom-->booked
+
+\treadModel cleaning_schedule["Cleaning Schedule"]
+\tui:Manager maintenance_ui["Maintenance UI"]
+\tcommand readyRoom["Ready Room"]
+\tdomainEvent:Inventory ready["Room Readied"]
+
+\tbooked-->cleaning_schedule
+\tcleaning_schedule-->maintenance_ui
+\tmaintenance_ui-->readyRoom
+\treadyRoom-->ready
+
+\tui:Guest checkin_ui["Check-in Screen"]
+\tcommand checkin["Check-in"]
+\tdomainEvent:Inventory checkedIn["Checked In"]
+\treadModel guestRoster["Guest Roster"]
+
+\tcheckin_ui-->checkin
+\tcheckin-->checkedIn
+\tcheckedIn-->guestRoster
+
+\tdomainEvent:GPS positionUpdated["Position Updated"]
+\tcommand hotelProximityTranslator["Hotel Proximity Translator"]
+\tdomainEvent:Inventory guestLeft["Guest Left Hotel"]
+
+\tpositionUpdated-->hotelProximityTranslator
+\thotelProximityTranslator-->guestLeft
+\tguestLeft-->guestRoster
+
+\tautomation:Manager checkOutAutomation["Check-out Automation"]
+\tcommand checkOut["Checked Out"]
+\tdomainEvent:Inventory checkedOut["Checked Out"]
+
+\tguestRoster-->checkOutAutomation
+\tcheckOutAutomation-->checkOut
+\tcheckOut-->checkedOut
+
+\tui:Guest payment_ui["Payment UI"]
+\tcommand pay["Pay"]
+\tdomainEvent:Payment paymentRequested["Payment Requested"]
+\treadModel paymentsToProcess["Payments to Process"]
+
+\tpayment_ui-->pay
+\tpay-->paymentRequested
+\tpaymentRequested-->paymentsToProcess
+
+\tautomation:Guest paymentProcessor["Payment Processor"]
+\tcommand processPayment["Process Payment"]
+\tdomainEvent:Payment paymentSucceeded["Payment Succeeded"]
+
+\tpaymentsToProcess-->paymentProcessor
+\tpaymentProcessor-->processPayment
+\tprocessPayment-->paymentSucceeded
+\tpaymentSucceeded-->paymentsToProcess
+
+\treadModel salesReport["Sales Report"]
+\tui:Manager sales_ui["Sales Report UI"]
+
+\tpaymentSucceeded-->salesReport
+\tsalesReport-->sales_ui
+`;
+
+  const ta = document.getElementById('src');
+  ta.value = DEFAULT_SRC;
+  const diagramEl = document.getElementById('diagram');
+
+  function render() {
+    try {
+      renderEventModel(ta.value, diagramEl);
+    } catch (err) {
+      diagramEl.innerHTML = '<div class="error">' +
+        String(err && err.stack || err) + '</div>';
+    }
+  }
+  document.getElementById('render').onclick = render;
+  render();
+</script>
+</body>
+</html>
