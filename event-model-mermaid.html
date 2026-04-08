@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Event Model – Mermaid integration demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 20px; max-width: 1600px; }
+  h1 { margin-top: 0; }
+  p code { background: #f3f4f6; padding: 1px 4px; border-radius: 3px; }
+  .mermaid {
+    border: 1px solid #ddd;
+    padding: 10px;
+    background: #fafafa;
+    overflow: auto;     /* wide event models scroll horizontally */
+    margin: 12px 0;
+  }
+  .mermaid svg { display: block; }
+  pre.src {
+    background: #f5f5f5; padding: 10px; font-size: 12px;
+    border-radius: 4px; overflow: auto;
+  }
+</style>
+</head>
+<body>
+<h1>Event Model as a Mermaid chart type</h1>
+<p>
+  This page registers the Event Model diagram as an external Mermaid diagram, then renders
+  a fenced <code>&lt;pre class="mermaid"&gt;</code> block whose body starts with <code>eventModel</code>.
+  Mermaid routes it to our adapter (<code>event-model-mermaid.js</code>), which reuses the same
+  parser, layout, and d3 drawing code as the standalone demo.
+</p>
+
+<p>The source in the mermaid block below:</p>
+<pre class="src" id="src-view"></pre>
+
+<h2>Rendered diagram</h2>
+<pre class="mermaid" id="diagram-block">eventModel
+	actor Manager
+	actor Guest
+	aggregate Inventory
+	aggregate Auth
+	aggregate Payment
+	aggregate GPS
+
+	ui:Guest reg_ui["Registration UI"]
+	command Register
+	domainEvent:Auth Registered
+
+	reg_ui-->Register
+	Register-->Registered
+
+	ui:Manager room_ui["Room Management"]
+	command addRoom["Add Room"]
+	domainEvent:Auth ra["Room Added"]
+	readModel avail["Room Availability"]
+
+	room_ui-->addRoom
+	addRoom-->ra
+	ra-->avail
+
+	ui:Guest booking_ui["Booking Screen"]
+	command bookRoom["Book Room"]
+	domainEvent:Inventory booked["Room Booked"]
+
+	avail-->booking_ui
+	booking_ui-->bookRoom
+	bookRoom-->booked
+
+	readModel cleaning_schedule["Cleaning Schedule"]
+	ui:Manager maintenance_ui["Maintenance UI"]
+	command readyRoom["Ready Room"]
+	domainEvent:Inventory ready["Room Readied"]
+	
+	booked-->cleaning_schedule
+	cleaning_schedule-->maintenance_ui
+	maintenance_ui-->readyRoom
+	readyRoom-->ready
+	
+	ui:Guest checkin_ui["Check-in Screen"]
+	command checkin["Check-in"]
+	domainEvent:Inventory checkedIn["Checked In"]
+	readModel guestRoster["Guest Roster"]
+
+	checkin_ui-->checkin
+	checkin-->checkedIn
+	checkedIn-->guestRoster
+
+	domainEvent:GPS positionUpdated["Position Updated"]
+	command hotelProximityTranslator["Hotel Proximity Translator"]
+	domainEvent:Inventory guestLeft["Guest Left Hotel"]
+
+	positionUpdated-->hotelProximityTranslator
+	hotelProximityTranslator-->guestLeft
+	guestLeft-->guestRoster
+
+	automation:Manager checkOutAutomation["Check-out Automation"]
+	command checkOut["Checked Out"]
+	domainEvent:Inventory checkedOut["Checked Out"]
+	
+	guestRoster-->checkOutAutomation
+	checkOutAutomation-->checkOut
+	checkOut-->checkedOut
+
+	ui:Guest payment_ui["Payment UI"]
+	command pay["Pay"]
+	domainEvent:Payment paymentRequested["Payment Requested"]
+	readModel paymentsToProcess["Payments to Process"]
+
+	payment_ui-->pay
+	pay-->paymentRequested
+	paymentRequested-->paymentsToProcess
+
+	automation:Guest paymentProcessor["Payment Processor"]
+	command processPayment["Process Payment"]
+	domainEvent:Payment paymentSucceeded["Payment Succeeded"]
+	
+	paymentsToProcess-->paymentProcessor
+	paymentProcessor-->processPayment
+	processPayment-->paymentSucceeded
+	paymentSucceeded-->paymentsToProcess
+
+	readModel salesReport["Sales Report"]
+	ui:Manager sales_ui["Sales Report UI"]
+
+	paymentSucceeded-->salesReport
+	salesReport-->sales_ui
+</pre>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  import eventModelDefinition from './event-model-mermaid.js';
+
+  // Show the raw source alongside the rendered diagram for clarity.
+  const block = document.getElementById('diagram-block');
+  document.getElementById('src-view').textContent = block.textContent;
+
+  // Register our diagram type BEFORE calling run().
+  await mermaid.registerExternalDiagrams([eventModelDefinition]);
+
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'loose',
+  });
+
+  try {
+    await mermaid.run({ nodes: [block] });
+  } catch (err) {
+    block.innerHTML = '<div style="color:#b00;white-space:pre-wrap;font-family:monospace">' +
+      String(err && err.stack || err) + '</div>';
+  }
+</script>
+</body>
+</html>

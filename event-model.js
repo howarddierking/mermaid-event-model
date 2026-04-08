@@ -221,20 +221,30 @@ const NODE_STYLES = {
 
 export function renderEventModel(src, target) {
   const model = parseEventModel(src);
-  const L = layoutEventModel(model);
+  const layout = layoutEventModel(model);
 
-  // Start clean.
   const root = d3.select(target);
   root.selectAll("svg").remove();
 
   const svg = root
     .append("svg")
     .attr("xmlns", "http://www.w3.org/2000/svg")
-    .attr("width", L.totalW)
-    .attr("height", L.totalH)
-    .attr("viewBox", `0 0 ${L.totalW} ${L.totalH}`)
+    .attr("width", layout.totalW)
+    .attr("height", layout.totalH)
+    .attr("viewBox", `0 0 ${layout.totalW} ${layout.totalH}`)
     .attr("font-family", "system-ui, -apple-system, sans-serif")
     .attr("font-size", 12);
+
+  drawInto(svg, model, layout);
+  return { svg: svg.node(), model, layout };
+}
+
+// Draws the event-model diagram into an existing d3 SVG selection. Used by
+// both `renderEventModel` (standalone demo) and the Mermaid adapter, which
+// receives the SVG element Mermaid has already created.
+export function drawInto(svg, model, L) {
+  // Wipe any prior content so re-renders don't stack.
+  svg.selectAll("*").remove();
 
   // Arrow marker.
   svg
@@ -389,8 +399,6 @@ export function renderEventModel(src, target) {
         .attr("dominant-baseline", "middle")
         .text((ln) => ln);
   });
-
-  return { svg: svg.node(), model, layout: L };
 }
 
 function edgePath(d, link) {

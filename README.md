@@ -4,20 +4,27 @@ A small DSL and SVG renderer for [Event Modeling](https://eventmodeling.org) dia
 
 ![reference blueprint](blueprint_model_only.jpeg)
 
-## Running the example
+## Running the examples
 
-The demo is a single HTML page with no build step. d3 is loaded from a CDN at runtime.
+There are two demo pages, both served as static HTML with no build step (mermaid and d3 are loaded from a CDN at runtime):
+
+| Page | What it shows |
+| --- | --- |
+| `event-model-mermaid.html` | **Recommended.** Registers Event Model as a [Mermaid external diagram](https://mermaid.js.org/config/usage.html#external-diagrams) and renders a `<pre class="mermaid">eventModel …</pre>` block — the same way you'd embed it inside a Markdown/Docusaurus/MkDocs site that already uses mermaid. |
+| `event-model.html` | Standalone demo with a DSL textarea and a Render button, no mermaid dependency. Useful for iterating on the DSL. |
+
+Start a local server and open the mermaid demo:
 
 ```sh
 # from the repo root
 python3 -m http.server 8000
 ```
 
-Then open <http://localhost:8000/event-model.html>.
+Then open <http://localhost:8000/event-model-mermaid.html>.
 
-A local HTTP server is recommended because `event-model.js` is an ES module and some browsers block module imports over `file://`. If yours doesn't, double-clicking `event-model.html` also works.
+A local HTTP server is required because the JS files are ES modules and most browsers block module imports over `file://`.
 
-Edit the DSL in the textarea and click **Render**. The diagram scrolls horizontally — each element gets its own column, so wide models overflow the right edge rather than compressing.
+The rendered diagram scrolls horizontally — each element gets its own column, so wide models overflow the right edge rather than compressing.
 
 ## The DSL
 
@@ -48,6 +55,35 @@ eventModel
 
 Labels are optional; if omitted, the identifier is used as the label.
 
+## Using it as a Mermaid chart type
+
+In any page that already uses Mermaid:
+
+```js
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+import eventModelDefinition from './event-model-mermaid.js';
+
+await mermaid.registerExternalDiagrams([eventModelDefinition]);
+mermaid.initialize({ startOnLoad: true });
+```
+
+Then any fenced block whose first line is `eventModel` is routed to our renderer:
+
+```html
+<pre class="mermaid">
+eventModel
+  actor Guest
+  aggregate Inventory
+  ui:Guest booking_ui["Booking Screen"]
+  command bookRoom["Book Room"]
+  domainEvent:Inventory booked["Room Booked"]
+  booking_ui-->bookRoom
+  bookRoom-->booked
+</pre>
+```
+
+The adapter (`event-model-mermaid.js`) implements Mermaid's external-diagram contract: `detector` matches the `eventModel` header, `parser.parse` calls `parseEventModel` and stashes the model, and `renderer.draw` grabs the `<svg>` Mermaid has already inserted into the DOM and populates it via the shared `drawInto` routine — the same one the standalone demo uses, so any visual change lands in both paths.
+
 ## How layout works
 
 The renderer (`event-model.js`) has three stages:
@@ -60,7 +96,9 @@ Because columns are a true topological order, the horizontal position of any nod
 
 ## Files
 
-- `event-model.html` — standalone demo page.
-- `event-model.js` — ES module with `parseEventModel`, `computeRanks`, `layoutEventModel`, and `renderEventModel`. Imports d3 v7 from jsDelivr.
-- `blueprint_dsl` — reference DSL source used as the default in the demo.
+- `event-model-mermaid.html` — demo using Mermaid's external-diagram API (recommended).
+- `event-model-mermaid.js` — adapter that registers the DSL as a Mermaid diagram type.
+- `event-model.html` — standalone demo with a DSL textarea and Render button.
+- `event-model.js` — core ES module with `parseEventModel`, `computeRanks`, `layoutEventModel`, `drawInto`, and `renderEventModel`. Imports d3 v7 from jsDelivr.
+- `blueprint_dsl` — reference DSL source.
 - `blueprint_model_only.jpeg`, `blueprint_large.jpg` — the target visuals the renderer approximates.
