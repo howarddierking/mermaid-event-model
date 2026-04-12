@@ -394,6 +394,8 @@ export function drawInto(svg, model, L) {
     .data(edgeData, (d) => d.id)
     .join("path")
     .attr("class", "edge")
+    .attr("data-from", (d) => d.from.el.id)
+    .attr("data-to", (d) => d.to.el.id)
     .attr("fill", "none")
     .attr("stroke", "#555")
     .attr("stroke-width", 1.25)
@@ -413,6 +415,11 @@ export function drawInto(svg, model, L) {
     .data(nodeData, (d) => d.el.id)
     .join("g")
     .attr("class", (d) => `node node-${d.el.kind}`)
+    .attr("data-node-id", (d) => d.el.id)
+    .attr("data-x", (d) => d.x)
+    .attr("data-y", (d) => d.y)
+    .attr("data-w", (d) => d.w)
+    .attr("data-h", (d) => d.h)
     .attr("transform", (d) => `translate(${d.x},${d.y})`);
 
   // Main rect (full height including fields section).
@@ -530,6 +537,61 @@ export function drawInto(svg, model, L) {
   // Click-to-collapse: use inline onclick so it survives Mermaid's DOM handling.
   // Register the toggle function globally so inline handlers can call it.
   if (typeof globalThis.__emToggleFields === "undefined") {
+    // Read a node's current visual bounds from its data attributes + rect height.
+    function nodeRect(g) {
+      const rect = g.querySelector(".node-bg");
+      return {
+        x: +g.dataset.x,
+        y: +g.dataset.y,
+        w: +g.dataset.w,
+        h: +rect.getAttribute("height"),
+      };
+    }
+
+    // Recompute a single edge path from DOM-derived positions.
+    function recomputeEdge(pathEl) {
+      const svgRoot = pathEl.closest("svg");
+      const fromId = pathEl.dataset.from;
+      const toId = pathEl.dataset.to;
+      const fromG = svgRoot.querySelector(`.node[data-node-id="${fromId}"]`);
+      const toG = svgRoot.querySelector(`.node[data-node-id="${toId}"]`);
+      if (!fromG || !toG) return;
+
+      const a = nodeRect(fromG);
+      const b = nodeRect(toG);
+
+      if (fromId === toId) {
+        const x = a.x + a.w;
+        const y1 = a.y + a.h * 0.3;
+        const y2 = a.y + a.h * 0.7;
+        const cx = x + 24;
+        pathEl.setAttribute("d", `M${x},${y1} C${cx},${y1} ${cx},${y2} ${x},${y2}`);
+        return;
+      }
+
+      const aCy = a.y + a.h / 2, bCy = b.y + b.h / 2;
+      const aCx = a.x + a.w / 2, bCx = b.x + b.w / 2;
+      let sx, sy, tx, ty;
+
+      if (Math.abs(aCy - bCy) < 10) {
+        if (bCx >= aCx) { sx = a.x + a.w; sy = aCy; tx = b.x; ty = bCy; }
+        else { sx = a.x; sy = aCy; tx = b.x + b.w; ty = bCy; }
+        const dx = Math.abs(tx - sx) * 0.4;
+        pathEl.setAttribute("d",
+          `M${sx},${sy} C${sx + (tx > sx ? dx : -dx)},${sy} ${tx + (tx > sx ? -dx : dx)},${ty} ${tx},${ty}`);
+        return;
+      }
+
+      if (aCy < bCy) { sx = aCx; sy = a.y + a.h; tx = bCx; ty = b.y; }
+      else { sx = aCx; sy = a.y; tx = bCx; ty = b.y + b.h; }
+
+      const dy = Math.abs(ty - sy);
+      const tension = Math.min(dy * 0.5, 40);
+      const signY = ty > sy ? 1 : -1;
+      pathEl.setAttribute("d",
+        `M${sx},${sy} C${sx},${sy + signY * tension} ${tx},${ty - signY * tension} ${tx},${ty}`);
+    }
+
     globalThis.__emToggleFields = function (nodeGroup) {
       const g = nodeGroup.closest(".node");
       const fields = g.querySelector(".fields-section");
@@ -542,15 +604,19 @@ export function drawInto(svg, model, L) {
         fields.style.display = "none";
         divider.style.display = "none";
         bgRect.setAttribute("height", bgRect.dataset.headingH);
-        // Rotate chevron to point right (collapsed).
         chevron.querySelector(".chevron-path").setAttribute("d", "M2,0 L8,5 L2,10");
       } else {
         fields.style.display = "";
         divider.style.display = "";
         bgRect.setAttribute("height", bgRect.dataset.fullH);
-        // Rotate chevron to point down (expanded).
         chevron.querySelector(".chevron-path").setAttribute("d", "M0,2 L5,8 L10,2");
       }
+
+      // Recompute edges connected to this node.
+      const nodeId = g.dataset.nodeId;
+      const svgRoot = g.closest("svg");
+      svgRoot.querySelectorAll(`path.edge[data-from="${nodeId}"], path.edge[data-to="${nodeId}"]`)
+        .forEach(recomputeEdge);
     };
   }
 
