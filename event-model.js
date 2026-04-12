@@ -182,12 +182,47 @@ function layoutEventModel(model) {
   const MARGIN_T = 24;
   const MARGIN_R = 40;
   const MARGIN_B = 24;
-  const COL_W = 170;
-  const NODE_W = 140;
   const NODE_H_BASE = 54;
   const FIELD_LINE_H = 16;
   const LANE_PAD = 14;
   const SUB_GAP = 8;
+  const COL_GAP = 10;
+  const NODE_W_MIN = 140;
+
+  // Approximate character widths for the two font sizes used.
+  const LABEL_CHAR_W = 7;   // font-size 12
+  const FIELD_CHAR_W = 6;   // font-size 10
+  const LABEL_PAD = 24;     // horizontal padding for centered heading text
+  const FIELD_PAD = 20;     // left 8 + right 12 padding for field text
+
+  // Compute the minimum width each element needs to fit its content.
+  const nodeW = (el) => {
+    // Width needed for the widest wrapped label line.
+    const lines = wrapLabel(el.label, 20);
+    const maxLabelW = Math.max(...lines.map((l) => l.length)) * LABEL_CHAR_W + LABEL_PAD;
+
+    // Width needed for the widest field line.
+    let maxFieldW = 0;
+    if (el.fields && el.fields.length > 0) {
+      for (const f of el.fields) {
+        const fw = (f.name.length + 2 + f.type.length) * FIELD_CHAR_W + FIELD_PAD;
+        if (fw > maxFieldW) maxFieldW = fw;
+      }
+    }
+
+    return Math.max(NODE_W_MIN, maxLabelW, maxFieldW);
+  };
+
+  // Use a uniform node width sized to the widest element.
+  let NODE_W = NODE_W_MIN;
+  for (const el of elements) {
+    const w = nodeW(el);
+    if (w > NODE_W) NODE_W = w;
+  }
+  // Round up to even number for clean centering.
+  NODE_W = Math.ceil(NODE_W / 2) * 2;
+
+  const COL_W = NODE_W + COL_GAP;
 
   // Per-element height: base heading + optional fields section.
   const nodeH = (el) => {
@@ -345,8 +380,6 @@ export function drawInto(svg, model, L) {
   }
 
   // --- Edges --------------------------------------------------------------
-  const link = d3.linkHorizontal().x((p) => p[0]).y((p) => p[1]);
-
   const edgeData = model.edges
     .map((e) => ({
       id: `${e.from}->${e.to}`,
@@ -365,7 +398,7 @@ export function drawInto(svg, model, L) {
     .attr("stroke", "#555")
     .attr("stroke-width", 1.25)
     .attr("marker-end", "url(#em-arrow)")
-    .attr("d", (d) => edgePath(d, link));
+    .attr("d", (d) => edgePath(d));
 
   // --- Nodes --------------------------------------------------------------
   const HEADING_H = L.NODE_H_BASE;
@@ -532,21 +565,53 @@ export function drawInto(svg, model, L) {
   });
 }
 
-function edgePath(d, link) {
+function edgePath(d) {
+  const a = d.from;
+  const b = d.to;
+
   if (d.selfLoop) {
-    const x = d.from.x + d.from.w;
-    const y1 = d.from.y + d.from.h * 0.3;
-    const y2 = d.from.y + d.from.h * 0.7;
+    const x = a.x + a.w;
+    const y1 = a.y + a.h * 0.3;
+    const y2 = a.y + a.h * 0.7;
     const cx = x + 24;
     return `M${x},${y1} C${cx},${y1} ${cx},${y2} ${x},${y2}`;
   }
-  const a = d.from;
-  const b = d.to;
+
+  const aCy = a.y + a.h / 2;
+  const bCy = b.y + b.h / 2;
   const aCx = a.x + a.w / 2;
   const bCx = b.x + b.w / 2;
-  const source = bCx >= aCx ? [a.x + a.w, a.y + a.h / 2] : [a.x, a.y + a.h / 2];
-  const target = bCx >= aCx ? [b.x,       b.y + b.h / 2] : [b.x + b.w, b.y + b.h / 2];
-  return link({ source, target });
+
+  // Determine exit/entry points based on relative vertical position.
+  let sx, sy, tx, ty;
+  if (Math.abs(aCy - bCy) < 10) {
+    // Same lane — use side connections with horizontal bezier.
+    if (bCx >= aCx) {
+      sx = a.x + a.w; sy = aCy;
+      tx = b.x;       ty = bCy;
+    } else {
+      sx = a.x;       sy = aCy;
+      tx = b.x + b.w; ty = bCy;
+    }
+    const dx = Math.abs(tx - sx) * 0.4;
+    return `M${sx},${sy} C${sx + (tx > sx ? dx : -dx)},${sy} ${tx + (tx > sx ? -dx : dx)},${ty} ${tx},${ty}`;
+  }
+
+  // Different lanes — exit bottom or top, enter top or bottom.
+  if (aCy < bCy) {
+    // Source is above target: exit bottom, enter top.
+    sx = aCx; sy = a.y + a.h;
+    tx = bCx; ty = b.y;
+  } else {
+    // Source is below target: exit top, enter bottom.
+    sx = aCx; sy = a.y;
+    tx = bCx; ty = b.y + b.h;
+  }
+
+  const dy = Math.abs(ty - sy);
+  const tension = Math.min(dy * 0.5, 40);
+  const signY = ty > sy ? 1 : -1;
+  return `M${sx},${sy} C${sx},${sy + signY * tension} ${tx},${ty - signY * tension} ${tx},${ty}`;
 }
 
 function wrapLabel(text, maxChars) {
