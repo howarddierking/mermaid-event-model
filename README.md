@@ -55,6 +55,23 @@ eventModel
 
 Labels are optional; if omitted, the identifier is used as the label.
 
+### Data sections
+
+Commands, domain events, UIs, and read models can include a brace-delimited data section listing typed fields — similar to a Mermaid class diagram:
+
+```
+command bookRoom["Book Room"] {
+    guestId: UUID
+    roomId: UUID
+    checkIn: date
+    checkOut: date
+}
+```
+
+Supported types: `string`, `int`, `float`, `decimal`, `boolean`, `date`, `timestamp`, `UUID`.
+
+The renderer draws these as a two-section node: the label on top, a divider, and the field list below. Clicking a node with fields collapses or expands the data section. Node width is automatically sized to fit the widest label or field text.
+
 ## Using it as a Mermaid chart type
 
 In any page that already uses Mermaid:
@@ -74,9 +91,23 @@ Then any fenced block whose first line is `eventModel` is routed to our renderer
 eventModel
   actor Guest
   aggregate Inventory
-  ui:Guest booking_ui["Booking Screen"]
-  command bookRoom["Book Room"]
-  domainEvent:Inventory booked["Room Booked"]
+  ui:Guest booking_ui["Booking Screen"] {
+    roomId: UUID
+    checkIn: date
+    checkOut: date
+  }
+  command bookRoom["Book Room"] {
+    guestId: UUID
+    roomId: UUID
+    checkIn: date
+    checkOut: date
+  }
+  domainEvent:Inventory booked["Room Booked"] {
+    bookingId: UUID
+    guestId: UUID
+    roomId: UUID
+    bookedAt: timestamp
+  }
   booking_ui-->bookRoom
   bookRoom-->booked
 </pre>
@@ -90,7 +121,7 @@ The renderer (`event-model.js`) has three stages:
 
 1. **Parse** — `parseEventModel(src)` reads the DSL into `{ actors, aggregates, elements, edges }`.
 2. **Rank** — `computeRanks` runs a DFS to identify back-edges (so cycles like `paymentSucceeded ↔ paymentsToProcess` don't blow up), then performs Kahn's topological sort of the forward DAG with declaration order as the tiebreaker. Each element gets a unique column — no two elements share an x-position, even across lanes.
-3. **Layout + draw** — `layoutEventModel` places each element at `(column × colWidth, lane.y)`; `renderEventModel(src, target)` uses d3 data joins to draw lane bands, a dashed time axis, edges (as `d3.linkHorizontal` beziers), and the nodes with kind-specific styles.
+3. **Layout + draw** — `layoutEventModel` places each element at `(column × colWidth, lane.y)` and auto-sizes node width to fit content; `renderEventModel(src, target)` uses d3 data joins to draw lane bands, a dashed time axis, edges (as vertical bezier curves connecting top/bottom of nodes across lanes), and two-section nodes with collapsible data fields.
 
 Because columns are a true topological order, the horizontal position of any node is its earliest possible time given the causal edges you declared — the core property an Event Model needs.
 
