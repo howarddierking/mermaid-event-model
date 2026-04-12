@@ -22,26 +22,41 @@ import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
 
 function parseEventModel(src) {
   const elementRe =
-    /^(ui|command|domainEvent|readModel|automation)(?::(\w+))?\s+(\w+)(?:\s*\["([^"]*)"\])?$/;
+    /^(ui|command|domainEvent|readModel|automation)(?::(\w+))?\s+(\w+)(?:\s*\["([^"]*)"\])?\s*(\{)?\s*$/;
   const edgeRe = /^(\w+)\s*-->\s*(\w+)$/;
   const actorRe = /^actor\s+(\w+)$/;
   const aggRe = /^aggregate\s+(\w+)$/;
+  const fieldRe = /^(\w+)\s*:\s*(\w+)$/;
 
   const actors = [];
   const aggregates = [];
   const elements = [];
   const edges = [];
 
-  for (const raw of src.split(/\r?\n/)) {
-    const line = raw.trim();
+  const lines = src.split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trim();
+    i++;
     if (!line || line === "eventModel") continue;
 
     let m;
     if ((m = line.match(actorRe))) { actors.push(m[1]); continue; }
     if ((m = line.match(aggRe)))   { aggregates.push(m[1]); continue; }
     if ((m = line.match(elementRe))) {
-      const [, kind, lane, id, label] = m;
-      elements.push({ id, kind, lane: lane || null, label: label || id });
+      const [, kind, lane, id, label, openBrace] = m;
+      const fields = [];
+      if (openBrace) {
+        // Consume lines until closing brace.
+        while (i < lines.length) {
+          const fl = lines[i].trim();
+          i++;
+          if (fl === "}") break;
+          const fm = fl.match(fieldRe);
+          if (fm) fields.push({ name: fm[1], type: fm[2] });
+        }
+      }
+      elements.push({ id, kind, lane: lane || null, label: label || id, fields });
       continue;
     }
     if ((m = line.match(edgeRe))) {
@@ -169,21 +184,32 @@ function layoutEventModel(model) {
   const MARGIN_B = 24;
   const COL_W = 170;
   const NODE_W = 140;
-  const NODE_H = 54;
+  const NODE_H_BASE = 54;
+  const FIELD_LINE_H = 16;
   const LANE_PAD = 14;
   const SUB_GAP = 8;
 
-  const maxStack = new Map(lanes.map((l) => [l.key, 1]));
+  // Per-element height: base heading + optional fields section.
+  const nodeH = (el) => {
+    if (!el.fields || el.fields.length === 0) return NODE_H_BASE;
+    // heading section + divider + fields
+    return NODE_H_BASE + el.fields.length * FIELD_LINE_H + 4;
+  };
+
+  // Track the tallest stack per lane for lane sizing.
+  const maxStackH = new Map(lanes.map((l) => [l.key, NODE_H_BASE]));
   for (const [k, arr] of cells) {
     const laneKey = k.split("|")[0];
-    if (arr.length > maxStack.get(laneKey)) maxStack.set(laneKey, arr.length);
+    let stackH = 0;
+    for (const el of arr) stackH += nodeH(el);
+    stackH += Math.max(0, arr.length - 1) * SUB_GAP;
+    if (stackH > maxStackH.get(laneKey)) maxStackH.set(laneKey, stackH);
   }
 
   const laneRects = [];
   let y = MARGIN_T;
   for (const lane of lanes) {
-    const n = maxStack.get(lane.key);
-    const h = LANE_PAD * 2 + n * NODE_H + Math.max(0, n - 1) * SUB_GAP;
+    const h = LANE_PAD * 2 + maxStackH.get(lane.key);
     laneRects.push({ ...lane, y, h });
     y += h;
   }
@@ -199,16 +225,20 @@ function layoutEventModel(model) {
     const col = +colStr;
     const lr = laneRects[laneIndex.get(laneKey)];
     const nSub = arr.length;
-    const totalSubH = nSub * NODE_H + Math.max(0, nSub - 1) * SUB_GAP;
-    const startY = lr.y + (lr.h - totalSubH) / 2;
+    let totalSubH = 0;
+    for (const el of arr) totalSubH += nodeH(el);
+    totalSubH += Math.max(0, nSub - 1) * SUB_GAP;
+    let curY = lr.y + (lr.h - totalSubH) / 2;
     const cx = MARGIN_L + col * COL_W + COL_W / 2;
     const nx = cx - NODE_W / 2;
-    arr.forEach((el, i) => {
-      pos.set(el.id, { el, x: nx, y: startY + i * (NODE_H + SUB_GAP), w: NODE_W, h: NODE_H });
-    });
+    for (const el of arr) {
+      const h = nodeH(el);
+      pos.set(el.id, { el, x: nx, y: curY, w: NODE_W, h });
+      curY += h + SUB_GAP;
+    }
   }
 
-  return { lanes: laneRects, pos, edges: model.edges, elements, totalW, totalH, MARGIN_L };
+  return { lanes: laneRects, pos, edges: model.edges, elements, totalW, totalH, MARGIN_L, NODE_H_BASE };
 }
 
 const NODE_STYLES = {
@@ -338,6 +368,9 @@ export function drawInto(svg, model, L) {
     .attr("d", (d) => edgePath(d, link));
 
   // --- Nodes --------------------------------------------------------------
+  const HEADING_H = L.NODE_H_BASE;
+  const FIELD_LINE_H = 16;
+
   const nodeData = model.elements
     .map((el) => ({ el, ...L.pos.get(el.id) }))
     .filter((d) => d.x != null);
@@ -349,8 +382,10 @@ export function drawInto(svg, model, L) {
     .attr("class", (d) => `node node-${d.el.kind}`)
     .attr("transform", (d) => `translate(${d.x},${d.y})`);
 
+  // Main rect (full height including fields section).
   nodeG
     .append("rect")
+    .attr("class", "node-bg")
     .attr("width", (d) => d.w)
     .attr("height", (d) => d.h)
     .attr("rx", (d) => (d.el.kind === "readModel" ? 14 : 4))
@@ -380,11 +415,13 @@ export function drawInto(svg, model, L) {
     .attr("font-size", 12)
     .text("⚙");
 
-  // Wrapped labels — one <text> per node with one <tspan> per line.
+  // Wrapped labels — centered in the heading section.
   nodeG.each(function (d) {
+    const hasFields = d.el.fields && d.el.fields.length > 0;
+    const headH = hasFields ? HEADING_H : d.h;
     const lines = wrapLabel(d.el.label, 20);
     const lineH = 13;
-    const startY = d.h / 2 - ((lines.length - 1) * lineH) / 2;
+    const startY = headH / 2 - ((lines.length - 1) * lineH) / 2;
     const text = d3
       .select(this)
       .append("text")
@@ -398,6 +435,100 @@ export function drawInto(svg, model, L) {
         .attr("y", (_, i) => startY + i * lineH)
         .attr("dominant-baseline", "middle")
         .text((ln) => ln);
+  });
+
+  // --- Fields section (class-diagram style, below a divider) -------------
+  const withFields = nodeG.filter((d) => d.el.fields && d.el.fields.length > 0);
+
+  // Divider line between heading and fields.
+  withFields
+    .append("line")
+    .attr("class", "field-divider")
+    .attr("x1", 0)
+    .attr("y1", HEADING_H)
+    .attr("x2", (d) => d.w)
+    .attr("y2", HEADING_H)
+    .attr("stroke", (d) => NODE_STYLES[d.el.kind].stroke)
+    .attr("stroke-width", 1);
+
+  // Toggle chevron icon in the heading section.
+  const chevronG = withFields
+    .append("g")
+    .attr("class", "toggle-indicator")
+    .attr("transform", (d) => `translate(${d.w - 16},${HEADING_H - 16})`);
+
+  chevronG
+    .append("circle")
+    .attr("cx", 5)
+    .attr("cy", 5)
+    .attr("r", 7)
+    .attr("fill", "rgba(0,0,0,0.06)")
+    .attr("stroke", "none");
+
+  // Down-pointing chevron path (expanded state).
+  chevronG
+    .append("path")
+    .attr("class", "chevron-path")
+    .attr("d", "M0,2 L5,8 L10,2")
+    .attr("fill", "none")
+    .attr("stroke", "#4b5563")
+    .attr("stroke-width", 1.5)
+    .attr("stroke-linecap", "round")
+    .attr("stroke-linejoin", "round");
+
+  // Fields group containing all field text lines.
+  const fieldsG = withFields
+    .append("g")
+    .attr("class", "fields-section")
+    .attr("transform", `translate(0,${HEADING_H})`);
+
+  fieldsG.each(function (d) {
+    const g = d3.select(this);
+    d.el.fields.forEach((f, i) => {
+      g.append("text")
+        .attr("x", 8)
+        .attr("y", 4 + (i + 1) * FIELD_LINE_H - 3)
+        .attr("fill", "#374151")
+        .attr("font-size", 10)
+        .text(`${f.name}: ${f.type}`);
+    });
+  });
+
+  // Click-to-collapse: use inline onclick so it survives Mermaid's DOM handling.
+  // Register the toggle function globally so inline handlers can call it.
+  if (typeof globalThis.__emToggleFields === "undefined") {
+    globalThis.__emToggleFields = function (nodeGroup) {
+      const g = nodeGroup.closest(".node");
+      const fields = g.querySelector(".fields-section");
+      const divider = g.querySelector(".field-divider");
+      const chevron = g.querySelector(".toggle-indicator");
+      const bgRect = g.querySelector(".node-bg");
+      const isVisible = fields.style.display !== "none";
+
+      if (isVisible) {
+        fields.style.display = "none";
+        divider.style.display = "none";
+        bgRect.setAttribute("height", bgRect.dataset.headingH);
+        // Rotate chevron to point right (collapsed).
+        chevron.querySelector(".chevron-path").setAttribute("d", "M2,0 L8,5 L2,10");
+      } else {
+        fields.style.display = "";
+        divider.style.display = "";
+        bgRect.setAttribute("height", bgRect.dataset.fullH);
+        // Rotate chevron to point down (expanded).
+        chevron.querySelector(".chevron-path").setAttribute("d", "M0,2 L5,8 L10,2");
+      }
+    };
+  }
+
+  // Store heights as data attributes and set inline onclick.
+  withFields.each(function (d) {
+    const g = d3.select(this);
+    g.select(".node-bg")
+      .attr("data-heading-h", HEADING_H)
+      .attr("data-full-h", d.h);
+    g.style("cursor", "pointer")
+      .attr("onclick", "__emToggleFields(evt.target)");
   });
 }
 

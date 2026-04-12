@@ -42,87 +42,233 @@
 	aggregate Payment
 	aggregate GPS
 
-	ui:Guest reg_ui["Registration UI"]
-	command Register
-	domainEvent:Auth Registered
+	ui:Guest reg_ui["Registration UI"] {
+		name: string
+		email: string
+		password: string
+	}
+	command Register {
+		name: string
+		email: string
+		password: string
+	}
+	domainEvent:Auth Registered {
+		guestId: UUID
+		name: string
+		email: string
+		registeredAt: timestamp
+	}
 
 	reg_ui-->Register
 	Register-->Registered
 
-	ui:Manager room_ui["Room Management"]
-	command addRoom["Add Room"]
-	domainEvent:Auth ra["Room Added"]
-	readModel avail["Room Availability"]
+	ui:Manager room_ui["Room Management"] {
+		roomNumber: int
+		floor: int
+		roomType: string
+		capacity: int
+	}
+	command addRoom["Add Room"] {
+		roomNumber: int
+		floor: int
+		roomType: string
+		capacity: int
+	}
+	domainEvent:Auth ra["Room Added"] {
+		roomId: UUID
+		roomNumber: int
+		floor: int
+		roomType: string
+		capacity: int
+	}
+	readModel avail["Room Availability"] {
+		roomId: UUID
+		roomNumber: int
+		roomType: string
+		isAvailable: boolean
+		nextCheckIn: date
+	}
 
 	room_ui-->addRoom
 	addRoom-->ra
 	ra-->avail
 
-	ui:Guest booking_ui["Booking Screen"]
-	command bookRoom["Book Room"]
-	domainEvent:Inventory booked["Room Booked"]
+	ui:Guest booking_ui["Booking Screen"] {
+		roomId: UUID
+		roomType: string
+		checkIn: date
+		checkOut: date
+	}
+	command bookRoom["Book Room"] {
+		guestId: UUID
+		roomId: UUID
+		checkIn: date
+		checkOut: date
+	}
+	domainEvent:Inventory booked["Room Booked"] {
+		bookingId: UUID
+		guestId: UUID
+		roomId: UUID
+		checkIn: date
+		checkOut: date
+		bookedAt: timestamp
+	}
 
 	avail-->booking_ui
 	booking_ui-->bookRoom
 	bookRoom-->booked
 
-	readModel cleaning_schedule["Cleaning Schedule"]
-	ui:Manager maintenance_ui["Maintenance UI"]
-	command readyRoom["Ready Room"]
-	domainEvent:Inventory ready["Room Readied"]
-	
+	readModel cleaning_schedule["Cleaning Schedule"] {
+		roomId: UUID
+		roomNumber: int
+		guestCheckOut: date
+		cleaningStatus: string
+	}
+	ui:Manager maintenance_ui["Maintenance UI"] {
+		roomId: UUID
+		roomNumber: int
+		cleaningStatus: string
+	}
+	command readyRoom["Ready Room"] {
+		roomId: UUID
+		cleanedBy: string
+	}
+	domainEvent:Inventory ready["Room Readied"] {
+		roomId: UUID
+		readiedAt: timestamp
+	}
+
 	booked-->cleaning_schedule
 	cleaning_schedule-->maintenance_ui
 	maintenance_ui-->readyRoom
 	readyRoom-->ready
-	
-	ui:Guest checkin_ui["Check-in Screen"]
-	command checkin["Check-in"]
-	domainEvent:Inventory checkedIn["Checked In"]
-	readModel guestRoster["Guest Roster"]
+
+	ui:Guest checkin_ui["Check-in Screen"] {
+		bookingId: UUID
+		guestName: string
+		roomNumber: int
+	}
+	command checkin["Check-in"] {
+		bookingId: UUID
+		guestId: UUID
+	}
+	domainEvent:Inventory checkedIn["Checked In"] {
+		bookingId: UUID
+		guestId: UUID
+		roomId: UUID
+		checkedInAt: timestamp
+	}
+	readModel guestRoster["Guest Roster"] {
+		guestId: UUID
+		guestName: string
+		roomNumber: int
+		checkedInAt: timestamp
+		isPresent: boolean
+	}
 
 	checkin_ui-->checkin
 	checkin-->checkedIn
 	checkedIn-->guestRoster
 
-	domainEvent:GPS positionUpdated["Position Updated"]
+	domainEvent:GPS positionUpdated["Position Updated"] {
+		guestId: UUID
+		latitude: float
+		longitude: float
+		timestamp: timestamp
+	}
 	command hotelProximityTranslator["Hotel Proximity Translator"]
-	domainEvent:Inventory guestLeft["Guest Left Hotel"]
+	domainEvent:Inventory guestLeft["Guest Left Hotel"] {
+		guestId: UUID
+		departedAt: timestamp
+	}
 
 	positionUpdated-->hotelProximityTranslator
 	hotelProximityTranslator-->guestLeft
 	guestLeft-->guestRoster
 
 	automation:Manager checkOutAutomation["Check-out Automation"]
-	command checkOut["Checked Out"]
-	domainEvent:Inventory checkedOut["Checked Out"]
-	
+	command checkOut["Checked Out"] {
+		bookingId: UUID
+		guestId: UUID
+		roomId: UUID
+	}
+	domainEvent:Inventory checkedOut["Checked Out"] {
+		bookingId: UUID
+		guestId: UUID
+		roomId: UUID
+		checkedOutAt: timestamp
+	}
+
 	guestRoster-->checkOutAutomation
 	checkOutAutomation-->checkOut
 	checkOut-->checkedOut
 
-	ui:Guest payment_ui["Payment UI"]
-	command pay["Pay"]
-	domainEvent:Payment paymentRequested["Payment Requested"]
-	readModel paymentsToProcess["Payments to Process"]
+	ui:Guest payment_ui["Payment UI"] {
+		bookingId: UUID
+		amount: decimal
+		currency: string
+		paymentMethod: string
+	}
+	command pay["Pay"] {
+		bookingId: UUID
+		amount: decimal
+		currency: string
+		paymentMethod: string
+	}
+	domainEvent:Payment paymentRequested["Payment Requested"] {
+		paymentId: UUID
+		bookingId: UUID
+		amount: decimal
+		currency: string
+		paymentMethod: string
+		requestedAt: timestamp
+	}
+	readModel paymentsToProcess["Payments to Process"] {
+		paymentId: UUID
+		bookingId: UUID
+		amount: decimal
+		currency: string
+		paymentMethod: string
+		status: string
+	}
 
 	payment_ui-->pay
 	pay-->paymentRequested
 	paymentRequested-->paymentsToProcess
 
 	automation:Guest paymentProcessor["Payment Processor"]
-	command processPayment["Process Payment"]
-	domainEvent:Payment paymentSucceeded["Payment Succeeded"]
-	
+	command processPayment["Process Payment"] {
+		paymentId: UUID
+		gatewayRef: string
+	}
+	domainEvent:Payment paymentSucceeded["Payment Succeeded"] {
+		paymentId: UUID
+		bookingId: UUID
+		amount: decimal
+		transactionRef: string
+		succeededAt: timestamp
+	}
+
 	paymentsToProcess-->paymentProcessor
 	paymentProcessor-->processPayment
 	processPayment-->paymentSucceeded
 	paymentSucceeded-->paymentsToProcess
 
-	readModel salesReport["Sales Report"]
-	ui:Manager sales_ui["Sales Report UI"]
+	readModel salesReport["Sales Report"] {
+		totalRevenue: decimal
+		transactionCount: int
+		averageBookingValue: decimal
+		revenueByRoomType: string
+	}
+	ui:Manager sales_ui["Sales Report UI"] {
+		totalRevenue: decimal
+		transactionCount: int
+		averageBookingValue: decimal
+		revenueByRoomType: string
+	}
 
 	paymentSucceeded-->salesReport
+	salesReport-->salesReport
 	salesReport-->sales_ui
 </pre>
 
