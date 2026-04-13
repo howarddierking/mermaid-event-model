@@ -389,6 +389,11 @@ export function drawInto(svg, model, L) {
     }))
     .filter((d) => d.from && d.to);
 
+  // Assign port positions so edges sharing a node side don't overlap.
+  // For each node+side, collect edges, sort by the other endpoint's x,
+  // then distribute evenly across the side (with padding at the edges).
+  assignEdgePorts(edgeData);
+
   gEdges
     .selectAll("path.edge")
     .data(edgeData, (d) => d.id)
@@ -396,6 +401,8 @@ export function drawInto(svg, model, L) {
     .attr("class", "edge")
     .attr("data-from", (d) => d.from.el.id)
     .attr("data-to", (d) => d.to.el.id)
+    .attr("data-from-port", (d) => d.fromPort)
+    .attr("data-to-port", (d) => d.toPort)
     .attr("fill", "none")
     .attr("stroke", "#555")
     .attr("stroke-width", 1.25)
@@ -548,11 +555,35 @@ export function drawInto(svg, model, L) {
       };
     }
 
-    // Recompute a single edge path from DOM-derived positions.
+    // Determine which side of a node an edge connects to (mirrors edgeSide).
+    function domEdgeSide(nodePos, otherPos) {
+      const aCy = nodePos.y + nodePos.h / 2;
+      const bCy = otherPos.y + otherPos.h / 2;
+      if (Math.abs(aCy - bCy) < 10) {
+        const aCx = nodePos.x + nodePos.w / 2;
+        const bCx = otherPos.x + otherPos.w / 2;
+        return bCx >= aCx ? "right" : "left";
+      }
+      return aCy < bCy ? "bottom" : "top";
+    }
+
+    function domPortXY(pos, side, port) {
+      const PAD = 12;
+      switch (side) {
+        case "bottom": return { x: pos.x + PAD + (pos.w - 2 * PAD) * port, y: pos.y + pos.h };
+        case "top":    return { x: pos.x + PAD + (pos.w - 2 * PAD) * port, y: pos.y };
+        case "right":  return { x: pos.x + pos.w, y: pos.y + PAD + (pos.h - 2 * PAD) * port };
+        case "left":   return { x: pos.x,         y: pos.y + PAD + (pos.h - 2 * PAD) * port };
+      }
+    }
+
+    // Recompute a single edge path from DOM-derived positions + stored ports.
     function recomputeEdge(pathEl) {
       const svgRoot = pathEl.closest("svg");
       const fromId = pathEl.dataset.from;
       const toId = pathEl.dataset.to;
+      const fromPort = +pathEl.dataset.fromPort;
+      const toPort = +pathEl.dataset.toPort;
       const fromG = svgRoot.querySelector(`.node[data-node-id="${fromId}"]`);
       const toG = svgRoot.querySelector(`.node[data-node-id="${toId}"]`);
       if (!fromG || !toG) return;
@@ -569,21 +600,18 @@ export function drawInto(svg, model, L) {
         return;
       }
 
-      const aCy = a.y + a.h / 2, bCy = b.y + b.h / 2;
-      const aCx = a.x + a.w / 2, bCx = b.x + b.w / 2;
-      let sx, sy, tx, ty;
+      const fromSide = domEdgeSide(a, b);
+      const toSide = domEdgeSide(b, a);
+      const src = domPortXY(a, fromSide, fromPort);
+      const tgt = domPortXY(b, toSide, toPort);
+      const sx = src.x, sy = src.y, tx = tgt.x, ty = tgt.y;
 
-      if (Math.abs(aCy - bCy) < 10) {
-        if (bCx >= aCx) { sx = a.x + a.w; sy = aCy; tx = b.x; ty = bCy; }
-        else { sx = a.x; sy = aCy; tx = b.x + b.w; ty = bCy; }
+      if (fromSide === "left" || fromSide === "right") {
         const dx = Math.abs(tx - sx) * 0.4;
         pathEl.setAttribute("d",
           `M${sx},${sy} C${sx + (tx > sx ? dx : -dx)},${sy} ${tx + (tx > sx ? -dx : dx)},${ty} ${tx},${ty}`);
         return;
       }
-
-      if (aCy < bCy) { sx = aCx; sy = a.y + a.h; tx = bCx; ty = b.y; }
-      else { sx = aCx; sy = a.y; tx = bCx; ty = b.y + b.h; }
 
       const dy = Math.abs(ty - sy);
       const tension = Math.min(dy * 0.5, 40);
@@ -631,6 +659,80 @@ export function drawInto(svg, model, L) {
   });
 }
 
+// For each node side (top, bottom, left, right), collect all edges that
+// connect there, sort them by the position of the other endpoint so they
+// don't cross, then assign evenly-spaced port fractions (0..1) along the
+// side. Each edge gets `fromPort` and `toPort` stored on it.
+function assignEdgePorts(edgeData) {
+  // Determine which side of a node an edge connects to.
+  function edgeSide(nodePos, otherPos) {
+    const aCy = nodePos.y + nodePos.h / 2;
+    const bCy = otherPos.y + otherPos.h / 2;
+    if (Math.abs(aCy - bCy) < 10) {
+      const aCx = nodePos.x + nodePos.w / 2;
+      const bCx = otherPos.x + otherPos.w / 2;
+      return bCx >= aCx ? "right" : "left";
+    }
+    return aCy < bCy ? "bottom" : "top";
+  }
+
+  // Collect edges per (node, side).
+  const buckets = new Map(); // key: "nodeId|side" -> [{edge, role, otherPos}]
+  for (const d of edgeData) {
+    if (d.selfLoop) { d.fromPort = 0.5; d.toPort = 0.5; continue; }
+
+    const fromSide = edgeSide(d.from, d.to);
+    const toSide = edgeSide(d.to, d.from);
+
+    const fk = d.from.el.id + "|" + fromSide;
+    const tk = d.to.el.id + "|" + toSide;
+    if (!buckets.has(fk)) buckets.set(fk, []);
+    if (!buckets.has(tk)) buckets.set(tk, []);
+    buckets.get(fk).push({ edge: d, role: "from", otherPos: d.to });
+    buckets.get(tk).push({ edge: d, role: "to", otherPos: d.from });
+  }
+
+  // Sort each bucket and assign evenly-spaced port fractions.
+  for (const [key, entries] of buckets) {
+    const side = key.split("|")[1];
+    // Sort by the other node's position along the edge axis so lines
+    // don't cross: for top/bottom edges sort by x, for left/right by y.
+    if (side === "top" || side === "bottom") {
+      entries.sort((a, b) => (a.otherPos.x + a.otherPos.w / 2) - (b.otherPos.x + b.otherPos.w / 2));
+    } else {
+      entries.sort((a, b) => (a.otherPos.y + a.otherPos.h / 2) - (b.otherPos.y + b.otherPos.h / 2));
+    }
+    const n = entries.length;
+    entries.forEach((e, i) => {
+      const frac = (i + 1) / (n + 1); // evenly spaced, never at 0 or 1
+      if (e.role === "from") e.edge.fromPort = frac;
+      else e.edge.toPort = frac;
+    });
+  }
+}
+
+// Convert a port fraction (0..1) to an absolute coordinate on a node side.
+function portXY(pos, side, port) {
+  const PAD = 12; // keep ports away from corners
+  switch (side) {
+    case "bottom": return { x: pos.x + PAD + (pos.w - 2 * PAD) * port, y: pos.y + pos.h };
+    case "top":    return { x: pos.x + PAD + (pos.w - 2 * PAD) * port, y: pos.y };
+    case "right":  return { x: pos.x + pos.w, y: pos.y + PAD + (pos.h - 2 * PAD) * port };
+    case "left":   return { x: pos.x,         y: pos.y + PAD + (pos.h - 2 * PAD) * port };
+  }
+}
+
+function edgeSide(nodePos, otherPos) {
+  const aCy = nodePos.y + nodePos.h / 2;
+  const bCy = otherPos.y + otherPos.h / 2;
+  if (Math.abs(aCy - bCy) < 10) {
+    const aCx = nodePos.x + nodePos.w / 2;
+    const bCx = otherPos.x + otherPos.w / 2;
+    return bCx >= aCx ? "right" : "left";
+  }
+  return aCy < bCy ? "bottom" : "top";
+}
+
 function edgePath(d) {
   const a = d.from;
   const b = d.to;
@@ -643,37 +745,19 @@ function edgePath(d) {
     return `M${x},${y1} C${cx},${y1} ${cx},${y2} ${x},${y2}`;
   }
 
-  const aCy = a.y + a.h / 2;
-  const bCy = b.y + b.h / 2;
-  const aCx = a.x + a.w / 2;
-  const bCx = b.x + b.w / 2;
+  const fromSide = edgeSide(a, b);
+  const toSide = edgeSide(b, a);
+  const src = portXY(a, fromSide, d.fromPort);
+  const tgt = portXY(b, toSide, d.toPort);
+  const sx = src.x, sy = src.y, tx = tgt.x, ty = tgt.y;
 
-  // Determine exit/entry points based on relative vertical position.
-  let sx, sy, tx, ty;
-  if (Math.abs(aCy - bCy) < 10) {
-    // Same lane — use side connections with horizontal bezier.
-    if (bCx >= aCx) {
-      sx = a.x + a.w; sy = aCy;
-      tx = b.x;       ty = bCy;
-    } else {
-      sx = a.x;       sy = aCy;
-      tx = b.x + b.w; ty = bCy;
-    }
+  if (fromSide === "left" || fromSide === "right") {
+    // Horizontal bezier.
     const dx = Math.abs(tx - sx) * 0.4;
     return `M${sx},${sy} C${sx + (tx > sx ? dx : -dx)},${sy} ${tx + (tx > sx ? -dx : dx)},${ty} ${tx},${ty}`;
   }
 
-  // Different lanes — exit bottom or top, enter top or bottom.
-  if (aCy < bCy) {
-    // Source is above target: exit bottom, enter top.
-    sx = aCx; sy = a.y + a.h;
-    tx = bCx; ty = b.y;
-  } else {
-    // Source is below target: exit top, enter bottom.
-    sx = aCx; sy = a.y;
-    tx = bCx; ty = b.y + b.h;
-  }
-
+  // Vertical bezier.
   const dy = Math.abs(ty - sy);
   const tension = Math.min(dy * 0.5, 40);
   const signY = ty > sy ? 1 : -1;
