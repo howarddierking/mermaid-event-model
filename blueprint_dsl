@@ -22,9 +22,9 @@ eventModel
 		email: string
 		registeredAt: timestamp
 	}
-
-	reg_ui-->Register
-	Register-->Registered
+	slice registration_slice["Registration"]
+		reg_ui-->Register
+		Register-->Registered
 
 	ui:Manager room_ui["Room Management"] {
 		roomNumber: int
@@ -53,9 +53,12 @@ eventModel
 		nextCheckIn: date
 	}
 
-	room_ui-->addRoom
-	addRoom-->ra
-	ra-->avail
+	slice addroom_slice["Add Room"]
+		room_ui-->addRoom
+		addRoom-->ra
+	
+	slice show_availability_slice["Show Added Room"]
+		ra-->avail
 
 	ui:Guest booking_ui["Booking Screen"] {
 		roomId: UUID

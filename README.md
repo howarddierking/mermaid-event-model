@@ -42,6 +42,9 @@ eventModel
     automation:<Actor> <id>["Label"]
 
     <id> --> <id>
+
+    slice <id>["Label"]
+        <id> --> <id>
 ```
 
 - **actor** — declares a top swimlane (e.g. `Manager`, `Guest`).
@@ -71,6 +74,18 @@ command bookRoom["Book Room"] {
 Supported types: `string`, `int`, `float`, `decimal`, `boolean`, `date`, `timestamp`, `UUID`.
 
 The renderer draws these as a two-section node: the label on top, a divider, and the field list below. Clicking a node with fields collapses or expands the data section. Node width is automatically sized to fit the widest label or field text.
+
+### Slices
+
+A **slice** represents a vertical slice in Event Modeling terminology — a cohesive unit of behavior that cuts across UIs, commands, events, and read models. Declare a slice followed by an indented block of edges; the referenced nodes become the slice's members.
+
+```
+slice registration_slice["Registration"]
+    reg_ui-->Register
+    Register-->Registered
+```
+
+The renderer draws a dashed bounding box around the member nodes with the slice's label centered at the top of the box. The indented edges still participate in the overall flow — the slice just groups them visually.
 
 ## Using it as a Mermaid chart type
 

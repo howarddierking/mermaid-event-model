@@ -27,22 +27,49 @@ function parseEventModel(src) {
   const actorRe = /^actor\s+(\w+)$/;
   const aggRe = /^aggregate\s+(\w+)$/;
   const fieldRe = /^(\w+)\s*:\s*(\w+)$/;
+  const sliceRe = /^slice\s+(\w+)(?:\s*\["([^"]*)"\])?\s*$/;
 
   const actors = [];
   const aggregates = [];
   const elements = [];
   const edges = [];
+  const slices = [];
 
   const lines = src.split(/\r?\n/);
+  const indentOf = (raw) => raw.match(/^[\t ]*/)[0].length;
   let i = 0;
   while (i < lines.length) {
-    const line = lines[i].trim();
+    const raw = lines[i];
+    const line = raw.trim();
+    const lineIndent = indentOf(raw);
     i++;
     if (!line || line === "eventModel") continue;
 
     let m;
     if ((m = line.match(actorRe))) { actors.push(m[1]); continue; }
     if ((m = line.match(aggRe)))   { aggregates.push(m[1]); continue; }
+    if ((m = line.match(sliceRe))) {
+      // A slice declaration is followed by an indented block of edges. Only
+      // consume lines whose indent is strictly greater than the slice line's
+      // indent; dedenting back to <= that level ends the slice.
+      const [, id, label] = m;
+      const sliceEdges = [];
+      const nodeSet = new Set();
+      while (i < lines.length) {
+        const nextRaw = lines[i];
+        const nextLine = nextRaw.trim();
+        if (!nextLine) { i++; continue; }
+        if (indentOf(nextRaw) <= lineIndent) break;
+        const em = nextLine.match(edgeRe);
+        if (!em) { i++; continue; }
+        edges.push({ from: em[1], to: em[2] });
+        sliceEdges.push({ from: em[1], to: em[2] });
+        nodeSet.add(em[1]); nodeSet.add(em[2]);
+        i++;
+      }
+      slices.push({ id, label: label || id, edges: sliceEdges, nodeIds: [...nodeSet] });
+      continue;
+    }
     if ((m = line.match(elementRe))) {
       const [, kind, lane, id, label, openBrace] = m;
       const fields = [];
@@ -66,7 +93,7 @@ function parseEventModel(src) {
     // Unknown lines are ignored so the DSL can evolve without breaking render.
   }
 
-  return { actors, aggregates, elements, edges };
+  return { actors, aggregates, elements, edges, slices };
 }
 
 function computeRanks(elements, edges) {
@@ -273,7 +300,32 @@ function layoutEventModel(model) {
     }
   }
 
-  return { lanes: laneRects, pos, edges: model.edges, elements, totalW, totalH, MARGIN_L, NODE_H_BASE };
+  // Compute bounding boxes for each slice from its member nodes.
+  const SLICE_PAD = 10;
+  const SLICE_LABEL_H = 20;
+  const sliceRects = [];
+  for (const s of model.slices || []) {
+    const memberPositions = s.nodeIds.map((id) => pos.get(id)).filter(Boolean);
+    if (memberPositions.length === 0) continue;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of memberPositions) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x + p.w > maxX) maxX = p.x + p.w;
+      if (p.y + p.h > maxY) maxY = p.y + p.h;
+    }
+    sliceRects.push({
+      id: s.id,
+      label: s.label,
+      x: minX - SLICE_PAD,
+      y: minY - SLICE_PAD - SLICE_LABEL_H,
+      w: (maxX - minX) + SLICE_PAD * 2,
+      h: (maxY - minY) + SLICE_PAD * 2 + SLICE_LABEL_H,
+      labelH: SLICE_LABEL_H,
+    });
+  }
+
+  return { lanes: laneRects, pos, edges: model.edges, elements, slices: sliceRects, totalW, totalH, MARGIN_L, NODE_H_BASE };
 }
 
 const NODE_STYLES = {
@@ -327,10 +379,11 @@ export function drawInto(svg, model, L) {
       .attr("fill", "#555");
 
   // Draw-order layers: lanes (background) → axis → edges → nodes (top).
-  const gLanes = svg.append("g").attr("class", "lanes");
-  const gAxis  = svg.append("g").attr("class", "axis");
-  const gEdges = svg.append("g").attr("class", "edges");
-  const gNodes = svg.append("g").attr("class", "nodes");
+  const gLanes  = svg.append("g").attr("class", "lanes");
+  const gAxis   = svg.append("g").attr("class", "axis");
+  const gSlices = svg.append("g").attr("class", "slices");
+  const gEdges  = svg.append("g").attr("class", "edges");
+  const gNodes  = svg.append("g").attr("class", "nodes");
 
   // --- Lane bands ---------------------------------------------------------
   const laneG = gLanes
@@ -378,6 +431,38 @@ export function drawInto(svg, model, L) {
       .attr("fill", "#6b7280")
       .text("time →");
   }
+
+  // --- Slices -------------------------------------------------------------
+  // Dashed bounding box around each vertical slice's member nodes, with the
+  // slice label centered at the top inside the box.
+  const sliceG = gSlices
+    .selectAll("g.slice")
+    .data(L.slices || [], (d) => d.id)
+    .join("g")
+    .attr("class", "slice");
+
+  sliceG
+    .append("rect")
+    .attr("x", (d) => d.x)
+    .attr("y", (d) => d.y)
+    .attr("width", (d) => d.w)
+    .attr("height", (d) => d.h)
+    .attr("rx", 6)
+    .attr("ry", 6)
+    .attr("fill", "none")
+    .attr("stroke", "#64748b")
+    .attr("stroke-width", 1.5)
+    .attr("stroke-dasharray", "4 3");
+
+  sliceG
+    .append("text")
+    .attr("x", (d) => d.x + d.w / 2)
+    .attr("y", (d) => d.y + d.labelH / 2 + 1)
+    .attr("text-anchor", "middle")
+    .attr("dominant-baseline", "middle")
+    .attr("font-weight", 600)
+    .attr("fill", "#475569")
+    .text((d) => d.label);
 
   // --- Edges --------------------------------------------------------------
   const edgeData = model.edges

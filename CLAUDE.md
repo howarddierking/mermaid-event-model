@@ -24,6 +24,7 @@ The DSL is indented under a top-level `eventModel` block. Element-declaration li
 - `automation:<Actor> <id>["Label"]` — automated process acting on behalf of an actor.
 - `a-->b` — flow edge between any two declared ids.
 - `{ field: type }` — brace-delimited block after a `command`, `domainEvent`, `ui`, or `readModel` declaration listing typed fields (one `name: type` per line). Supported types include `string`, `int`, `float`, `decimal`, `boolean`, `date`, `timestamp`, `UUID`.
+- `slice <id>["Label"]` — declares a vertical slice. Followed by an indented block of `-->` edges whose referenced nodes are grouped into that slice. The renderer draws a dashed bounding box around the slice's member nodes with the label at the top.
 
 The canonical pattern is `ui → command → domainEvent → readModel → (ui | automation)`, with automations closing loops back to commands. Preserve this ordering when extending `blueprint_dsl`; the two image files are the source of truth for what the rendered output should look like.
 
