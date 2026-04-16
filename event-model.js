@@ -452,7 +452,11 @@ export function drawInto(svg, model, L) {
     .attr("fill", "none")
     .attr("stroke", "#64748b")
     .attr("stroke-width", 1.5)
-    .attr("stroke-dasharray", "4 3");
+    .attr("stroke-dasharray", "4 3")
+    .attr("pointer-events", "stroke")
+    .attr("cursor", "pointer")
+    .attr("onmouseenter", "this.setAttribute('stroke-width','3.5');this.setAttribute('stroke','#334155')")
+    .attr("onmouseleave", "this.setAttribute('stroke-width','1.5');this.setAttribute('stroke','#64748b')");
 
   sliceG
     .append("text")

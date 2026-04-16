@@ -24,6 +24,8 @@ Then open <http://localhost:8000/event-model-mermaid.html>.
 
 A local HTTP server is required because the JS files are ES modules and most browsers block module imports over `file://`.
 
+The mermaid demo loads `blueprint_dsl` via `fetch` and polls for changes every second — edit the file and the diagram updates automatically without a manual reload.
+
 The rendered diagram scrolls horizontally — each element gets its own column, so wide models overflow the right edge rather than compressing.
 
 ## The DSL
@@ -85,7 +87,7 @@ slice registration_slice["Registration"]
     Register-->Registered
 ```
 
-The renderer draws a dashed bounding box around the member nodes with the slice's label centered at the top of the box. The indented edges still participate in the overall flow — the slice just groups them visually.
+The renderer draws a dashed bounding box around the member nodes with the slice's label centered at the top of the box. The indented edges still participate in the overall flow — the slice just groups them visually. Hovering over a slice border highlights it (thicker, darker stroke) so you can identify individual slices when they overlap.
 
 ## Using it as a Mermaid chart type
 
@@ -140,6 +142,17 @@ The renderer (`event-model.js`) has three stages:
 
 Because columns are a true topological order, the horizontal position of any node is its earliest possible time given the causal edges you declared — the core property an Event Model needs.
 
+## Claude Code skills
+
+The `.claude/skills/` directory contains custom slash commands for working with Event Model DSL files:
+
+| Skill | Description |
+| --- | --- |
+| `/add-slices` | Analyzes data flow in a DSL file and proposes vertical slice groupings. Identifies command slices (ui → command → event) and read slices (event → readModel → ui/automation), presents them for review, then applies them. |
+| `/validate-completeness` | Checks the [information completeness principle](https://www.pradhan.is/blogs/event-modelling-best-practices) — traces every field in every UI and read model backward through events and commands to verify no data is assumed or missing. Reports gaps with suggested fixes. |
+
+Run `/add-slices blueprint_dsl` or `/validate-completeness blueprint_dsl` (both default to `blueprint_dsl` if no argument is given).
+
 ## Files
 
 - `event-model-mermaid.html` — demo using Mermaid's external-diagram API (recommended).
@@ -147,4 +160,5 @@ Because columns are a true topological order, the horizontal position of any nod
 - `event-model.html` — standalone demo with a DSL textarea and Render button.
 - `event-model.js` — core ES module with `parseEventModel`, `computeRanks`, `layoutEventModel`, `drawInto`, and `renderEventModel`. Imports d3 v7 from jsDelivr.
 - `blueprint_dsl` — reference DSL source.
+- `.claude/skills/` — Claude Code slash commands for DSL automation.
 - `blueprint_model_only.jpeg`, `blueprint_large.jpg` — the target visuals the renderer approximates.
