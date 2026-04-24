@@ -1,0 +1,9 @@
+.claude/
+.git/
+.gitignore
+blueprint_dsl
+blueprint_large.jpg
+blueprint_model_only.jpeg
+event-model.html
+event-model-mermaid.html
+CLAUDE.md

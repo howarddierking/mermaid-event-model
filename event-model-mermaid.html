@@ -15,11 +15,15 @@
     margin: 12px 0;
   }
   .mermaid svg { display: block; }
-  pre.src {
-    background: #f5f5f5; padding: 10px; font-size: 12px;
-    border-radius: 4px; overflow: auto;
-  }
 </style>
+<script type="importmap">
+{
+  "imports": {
+    "d3": "https://cdn.jsdelivr.net/npm/d3@7/+esm",
+    "mermaid": "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
+  }
+}
+</script>
 </head>
 <body>
 <h1>Event Model as a Mermaid chart type</h1>
@@ -31,20 +35,18 @@
 </p>
 
 <p>The source is loaded from <code>blueprint_dsl</code>; edit that file and the diagram will auto-refresh.</p>
-<pre class="src" id="src-view"></pre>
 
 <h2>Rendered diagram</h2>
 <pre class="mermaid" id="diagram-block">eventModel</pre>
 
 <script type="module">
-  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  import mermaid from 'mermaid';
   import eventModelDefinition from './event-model-mermaid.js';
 
   const DSL_URL = './blueprint_dsl';
   const POLL_MS = 1000;
 
   const container = document.getElementById('diagram-block');
-  const srcView = document.getElementById('src-view');
   let lastSrc = null;
 
   await mermaid.registerExternalDiagrams([eventModelDefinition]);
@@ -57,7 +59,6 @@
   }
 
   async function render(src) {
-    srcView.textContent = src;
     container.removeAttribute('data-processed');
     container.textContent = src;
     try {

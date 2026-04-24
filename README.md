@@ -4,6 +4,59 @@ A small DSL and SVG renderer for [Event Modeling](https://eventmodeling.org) dia
 
 ![reference blueprint](blueprint_model_only.jpeg)
 
+## Installation
+
+### As an npm package
+
+```sh
+npm install @howarddierking/mermaid-event-model d3 mermaid
+```
+
+`d3` and `mermaid` are peer dependencies. `mermaid` is optional — you only need it if you use the Mermaid adapter (the default export); the `./core` subpath entry (for standalone SVG rendering) only requires `d3`.
+
+Register it with Mermaid like any other external diagram:
+
+```js
+import mermaid from 'mermaid';
+import eventModelDefinition from '@howarddierking/mermaid-event-model';
+
+await mermaid.registerExternalDiagrams([eventModelDefinition]);
+mermaid.initialize({ startOnLoad: true });
+```
+
+Any fenced block whose first line is `eventModel` will now be routed through this renderer.
+
+For standalone use without Mermaid:
+
+```js
+import { renderEventModel } from '@howarddierking/mermaid-event-model/core';
+
+renderEventModel(dslSource, document.getElementById('diagram'));
+```
+
+### Via CDN (no build step)
+
+The package is mirrored on jsDelivr. Pair it with an importmap so the bare `d3` and `mermaid` imports resolve:
+
+```html
+<script type="importmap">
+{
+  "imports": {
+    "d3": "https://cdn.jsdelivr.net/npm/d3@7/+esm",
+    "mermaid": "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs",
+    "@howarddierking/mermaid-event-model": "https://cdn.jsdelivr.net/npm/@howarddierking/mermaid-event-model/event-model-mermaid.js"
+  }
+}
+</script>
+<script type="module">
+  import mermaid from 'mermaid';
+  import eventModelDefinition from '@howarddierking/mermaid-event-model';
+
+  await mermaid.registerExternalDiagrams([eventModelDefinition]);
+  mermaid.initialize({ startOnLoad: true });
+</script>
+```
+
 ## Running the examples
 
 There are two demo pages, both served as static HTML with no build step (mermaid and d3 are loaded from a CDN at runtime):
@@ -91,17 +144,7 @@ The renderer draws a dashed bounding box around the member nodes with the slice'
 
 ## Using it as a Mermaid chart type
 
-In any page that already uses Mermaid:
-
-```js
-import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-import eventModelDefinition from './event-model-mermaid.js';
-
-await mermaid.registerExternalDiagrams([eventModelDefinition]);
-mermaid.initialize({ startOnLoad: true });
-```
-
-Then any fenced block whose first line is `eventModel` is routed to our renderer:
+Once registered (see [Installation](#installation)), any fenced block whose first line is `eventModel` is routed to our renderer:
 
 ```html
 <pre class="mermaid">
@@ -150,15 +193,16 @@ The `.claude/skills/` directory contains custom slash commands for working with 
 | --- | --- |
 | `/add-slices` | Analyzes data flow in a DSL file and proposes vertical slice groupings. Identifies command slices (ui → command → event) and read slices (event → readModel → ui/automation), presents them for review, then applies them. |
 | `/validate-completeness` | Checks the [information completeness principle](https://www.pradhan.is/blogs/event-modelling-best-practices) — traces every field in every UI and read model backward through events and commands to verify no data is assumed or missing. Reports gaps with suggested fixes. |
+| `/demo-event-model` | Writes the canonical hotel-booking reference DSL to a target file (defaults to `blueprint_dsl`). Useful for seeding a new model with a working example that exercises every DSL feature. |
 
-Run `/add-slices blueprint_dsl` or `/validate-completeness blueprint_dsl` (both default to `blueprint_dsl` if no argument is given).
+Run any of them with a target path (e.g. `/add-slices blueprint_dsl`) or with no argument to default to `blueprint_dsl`.
 
 ## Files
 
 - `event-model-mermaid.html` — demo using Mermaid's external-diagram API (recommended).
 - `event-model-mermaid.js` — adapter that registers the DSL as a Mermaid diagram type.
 - `event-model.html` — standalone demo with a DSL textarea and Render button.
-- `event-model.js` — core ES module with `parseEventModel`, `computeRanks`, `layoutEventModel`, `drawInto`, and `renderEventModel`. Imports d3 v7 from jsDelivr.
+- `event-model.js` — core ES module with `parseEventModel`, `computeRanks`, `layoutEventModel`, `drawInto`, and `renderEventModel`. Takes `d3` as a peer dependency.
 - `blueprint_dsl` — reference DSL source.
 - `.claude/skills/` — Claude Code slash commands for DSL automation.
 - `blueprint_model_only.jpeg`, `blueprint_large.jpg` — the target visuals the renderer approximates.

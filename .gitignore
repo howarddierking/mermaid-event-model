@@ -14,6 +14,7 @@ yarn-debug.log*
 yarn-error.log*
 package-lock.json
 yarn.lock
+*.tgz
 
 # Logs / local scratch
 *.log

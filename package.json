@@ -1,0 +1,49 @@
+{
+  "name": "@howarddierking/mermaid-event-model",
+  "version": "0.1.0",
+  "description": "Event Modeling DSL and SVG renderer as a Mermaid external diagram. Draws a strict horizontal timeline with actor/aggregate swimlanes, collapsible data sections, and vertical-slice bounding boxes.",
+  "type": "module",
+  "main": "./event-model-mermaid.js",
+  "exports": {
+    ".": "./event-model-mermaid.js",
+    "./core": "./event-model.js"
+  },
+  "files": [
+    "event-model.js",
+    "event-model-mermaid.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "d3": "^7",
+    "mermaid": "^11"
+  },
+  "peerDependenciesMeta": {
+    "mermaid": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "event-modeling",
+    "event-model",
+    "mermaid",
+    "mermaid-diagram",
+    "dsl",
+    "cqrs",
+    "diagram",
+    "d3"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/howarddierking/mermaid-event-model.git"
+  },
+  "bugs": {
+    "url": "https://github.com/howarddierking/mermaid-event-model/issues"
+  },
+  "homepage": "https://github.com/howarddierking/mermaid-event-model#readme",
+  "license": "MIT",
+  "author": "Howard Dierking",
+  "engines": {
+    "node": ">=18"
+  }
+}

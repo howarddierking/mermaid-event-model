@@ -9,7 +9,7 @@
 // Then any fenced block whose first non-whitespace line is `eventModel`
 // will be routed to this renderer.
 
-import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+import * as d3 from "d3";
 import { parseEventModel, layoutEventModel, drawInto } from "./event-model.js";
 
 // One db instance per registration. Mermaid calls parser.parse() before
