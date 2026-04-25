@@ -1,0 +1,11 @@
+{
+  "name": "mermaid-event-model",
+  "description": "Skills for authoring Event Model DSL files: auto-slicing, information-completeness validation, and a demo-DSL generator. Pairs with the @howarddierking/mermaid-event-model renderer.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Howard Dierking"
+  },
+  "homepage": "https://github.com/howarddierking/mermaid-event-model",
+  "repository": "https://github.com/howarddierking/mermaid-event-model",
+  "license": "MIT"
+}

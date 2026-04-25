@@ -14,8 +14,7 @@ The argument `$ARGUMENTS` is the target file path. If no argument is provided, d
 
 ## What to do
 
-1. Read the template at the absolute path:
-   `/Users/howarddierking/dev/scratch/mermaid-event-model/.claude/skills/demo-event-model/template.dsl`
+1. Read the template file `template.dsl` located in the same directory as this `SKILL.md`. Use the `Bash` tool with `dirname` on the path to this file to locate it robustly — do not hard-code an absolute path.
 
 2. Write its contents verbatim to the target file. Preserve tab indentation exactly — the DSL parser is indent-aware and uses tabs.
 

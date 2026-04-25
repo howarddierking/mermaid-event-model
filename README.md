@@ -185,17 +185,27 @@ The renderer (`event-model.js`) has three stages:
 
 Because columns are a true topological order, the horizontal position of any node is its earliest possible time given the causal edges you declared — the core property an Event Model needs.
 
-## Claude Code skills
+## Claude Code plugin
 
-The `.claude/skills/` directory contains custom slash commands for working with Event Model DSL files:
+This repo doubles as a [Claude Code plugin](https://code.claude.com/docs/en/plugins) that exposes authoring skills for Event Model DSL files.
+
+Install it in any project where you're authoring Event Models:
+
+```
+/plugin install howarddierking/mermaid-event-model
+```
 
 | Skill | Description |
 | --- | --- |
-| `/add-slices` | Analyzes data flow in a DSL file and proposes vertical slice groupings. Identifies command slices (ui → command → event) and read slices (event → readModel → ui/automation), presents them for review, then applies them. |
-| `/validate-completeness` | Checks the [information completeness principle](https://www.pradhan.is/blogs/event-modelling-best-practices) — traces every field in every UI and read model backward through events and commands to verify no data is assumed or missing. Reports gaps with suggested fixes. |
-| `/demo-event-model` | Writes the canonical hotel-booking reference DSL to a target file (defaults to `blueprint_dsl`). Useful for seeding a new model with a working example that exercises every DSL feature. |
+| `/mermaid-event-model:add-slices` | Analyzes data flow in a DSL file and proposes vertical slice groupings. Identifies command slices (ui → command → event) and read slices (event → readModel → ui/automation), presents them for review, then applies them. |
+| `/mermaid-event-model:validate-completeness` | Checks the [information completeness principle](https://www.pradhan.is/blogs/event-modelling-best-practices) — traces every field in every UI and read model backward through events and commands to verify no data is assumed or missing. Reports gaps with suggested fixes. |
+| `/mermaid-event-model:demo-event-model` | Writes the canonical hotel-booking reference DSL to a target file (defaults to `blueprint_dsl`). Useful for seeding a new model with a working example. |
 
-Run any of them with a target path (e.g. `/add-slices blueprint_dsl`) or with no argument to default to `blueprint_dsl`.
+Each skill accepts an optional target path; they default to `blueprint_dsl`.
+
+### Local plugin development
+
+The plugin skills live at [`skills/`](skills/) and the manifest at [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json). The top-level `.claude/skills/` is a symlink to `skills/` so the skills also work as project-scoped slash commands while editing this repo (without the `mermaid-event-model:` namespace prefix).
 
 ## Files
 
@@ -204,5 +214,7 @@ Run any of them with a target path (e.g. `/add-slices blueprint_dsl`) or with no
 - `event-model.html` — standalone demo with a DSL textarea and Render button.
 - `event-model.js` — core ES module with `parseEventModel`, `computeRanks`, `layoutEventModel`, `drawInto`, and `renderEventModel`. Takes `d3` as a peer dependency.
 - `blueprint_dsl` — reference DSL source.
-- `.claude/skills/` — Claude Code slash commands for DSL automation.
+- `skills/` — Claude Code skills for DSL authoring (auto-slicing, completeness validation, demo generator).
+- `.claude-plugin/plugin.json` — Manifest that makes this repo installable as a Claude Code plugin.
+- `.claude/skills/` — symlink to `skills/` so the same skills also work as local project-scoped commands while developing in this repo.
 - `blueprint_model_only.jpeg`, `blueprint_large.jpg` — the target visuals the renderer approximates.

@@ -1,6 +1,10 @@
 .claude/
+.claude-plugin/
 .git/
+.github/
 .gitignore
+.nvmrc
+skills/
 blueprint_dsl
 blueprint_large.jpg
 blueprint_model_only.jpeg
