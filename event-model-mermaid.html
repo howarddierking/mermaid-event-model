@@ -43,7 +43,8 @@
   import mermaid from 'mermaid';
   import eventModelDefinition from './event-model-mermaid.js';
 
-  const DSL_URL = './blueprint_dsl';
+  const params = new URLSearchParams(location.search);
+  const DSL_URL = './' + (params.get('dsl') || 'blueprint_dsl');
   const POLL_MS = 1000;
 
   const container = document.getElementById('diagram-block');

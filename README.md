@@ -77,24 +77,24 @@ Then open <http://localhost:8000/event-model-mermaid.html>.
 
 A local HTTP server is required because the JS files are ES modules and most browsers block module imports over `file://`.
 
-The mermaid demo loads `blueprint_dsl` via `fetch` and polls for changes every second — edit the file and the diagram updates automatically without a manual reload.
+The mermaid demo loads `blueprint_dsl` via `fetch` and polls for changes every second — edit the file and the diagram updates automatically without a manual reload. Override the source with a `?dsl=<filename>` query param (e.g. `event-model-mermaid.html?dsl=blueprint_dsl_dcb` to view the DCB variant).
 
 The rendered diagram scrolls horizontally — each element gets its own column, so wide models overflow the right edge rather than compressing.
 
 ## The DSL
 
-See [`blueprint_dsl`](blueprint_dsl) for a full example (a hotel booking system). The grammar:
+See [`blueprint_dsl`](blueprint_dsl) for a full aggregate-based example (a hotel booking system) and [`blueprint_dsl_dcb`](blueprint_dsl_dcb) for the same model rewritten in DCB style (no aggregates, with `reads` clauses on commands). The grammar:
 
 ```
 eventModel
     actor <Name>
-    aggregate <Name>
+    aggregate <Name>                                        (optional — DCB models omit aggregates)
 
-    ui:<Actor>         <id>["Label"]
-    command            <id>["Label"]
-    domainEvent:<Agg>  <id>["Label"]
-    readModel          <id>["Label"]
-    automation:<Actor> <id>["Label"]
+    ui:<Actor>            <id>["Label"]
+    command               <id>["Label"] [reads [<event>, ...]]
+    domainEvent[:<Agg>]   <id>["Label"]
+    readModel             <id>["Label"]
+    automation:<Actor>    <id>["Label"]
 
     <id> --> <id>
 
@@ -103,10 +103,10 @@ eventModel
 ```
 
 - **actor** — declares a top swimlane (e.g. `Manager`, `Guest`).
-- **aggregate** — declares a bottom swimlane representing a bounded context (e.g. `Inventory`, `Payment`).
+- **aggregate** — declares a bottom swimlane representing a bounded context (e.g. `Inventory`, `Payment`). Optional; omit when modeling DCB-style.
 - **ui** — a screen owned by an actor; placed in that actor's lane.
 - **command** — an intent issued from a UI or automation; placed in the Time lane.
-- **domainEvent** — a fact emitted by an aggregate; placed in that aggregate's lane.
+- **domainEvent** — a fact emitted by an aggregate; placed in that aggregate's lane. If the `:<Aggregate>` qualifier is omitted, the event lands in a synthesized `Events` lane below `Time`.
 - **readModel** — a projection read by UIs or automations; placed in the Time lane.
 - **automation** — an automated process owned by an actor; placed in that actor's lane.
 - **-->** — a flow edge. The canonical pattern is `ui → command → domainEvent → readModel → (ui | automation)`.
@@ -129,6 +129,27 @@ command bookRoom["Book Room"] {
 Supported types: `string`, `int`, `float`, `decimal`, `boolean`, `date`, `timestamp`, `UUID`.
 
 The renderer draws these as a two-section node: the label on top, a divider, and the field list below. Clicking a node with fields collapses or expands the data section. Node width is automatically sized to fit the widest label or field text.
+
+### Dynamic Consistency Boundaries (DCB)
+
+In DCB-style models, commands aren't bound to a single aggregate; instead each command declares which past event types it must replay to enforce consistency. Express this with an optional `reads [...]` clause on the command, between the label and the data block:
+
+```
+command bookRoom["Book Room"] reads [Registered, ra, booked] {
+    guestId: UUID
+    roomId: UUID
+    checkIn: date
+    checkOut: date
+}
+
+command hotelProximityTranslator["Hotel Proximity Translator"] reads [checkedIn, checkedOut]
+```
+
+The renderer adds a third section to the command box, below the data fields, listing each consumed event prefixed with `«`. The chevron toggle collapses fields and reads together.
+
+`reads` is a directive to the event-sourcing framework about which events to hydrate — **not** a flow edge. It does not affect column ranking, slice membership, or arrow drawing. Auto-slicing (`/mermaid-event-model:add-slices`) ignores `reads` entirely.
+
+DCB models typically omit `aggregate` declarations. Domain events declared without a `:<Aggregate>` qualifier land in a synthesized `Events` lane below `Time`, so the diagram preserves the actors-on-top, events-on-bottom layout without needing aggregate names. Aggregate-based and DCB-based syntax can mix in the same file: aggregate-qualified events still flow to their named lane.
 
 ### Slices
 
@@ -179,9 +200,9 @@ The adapter (`event-model-mermaid.js`) implements Mermaid's external-diagram con
 
 The renderer (`event-model.js`) has three stages:
 
-1. **Parse** — `parseEventModel(src)` reads the DSL into `{ actors, aggregates, elements, edges }`.
-2. **Rank** — `computeRanks` runs a DFS to identify back-edges (so cycles like `paymentSucceeded ↔ paymentsToProcess` don't blow up), then performs Kahn's topological sort of the forward DAG with declaration order as the tiebreaker. Each element gets a unique column — no two elements share an x-position, even across lanes.
-3. **Layout + draw** — `layoutEventModel` places each element at `(column × colWidth, lane.y)` and auto-sizes node width to fit content; `renderEventModel(src, target)` uses d3 data joins to draw lane bands, a dashed time axis, edges (as vertical bezier curves connecting top/bottom of nodes across lanes), and two-section nodes with collapsible data fields.
+1. **Parse** — `parseEventModel(src)` reads the DSL into `{ actors, aggregates, elements, edges, slices }`. Each element carries optional `fields` (data section) and `reads` (DCB consume list).
+2. **Rank** — `computeRanks` runs a DFS to identify back-edges (so cycles like `paymentSucceeded ↔ paymentsToProcess` don't blow up), then performs Kahn's topological sort of the forward DAG with declaration order as the tiebreaker. Each element gets a unique column — no two elements share an x-position, even across lanes. `reads` is ignored at this stage since it isn't a flow edge.
+3. **Layout + draw** — `layoutEventModel` builds the lane stack (actors → Time → aggregates, plus a synthesized `Events` lane when any `domainEvent` lacks an aggregate qualifier), places each element at `(column × colWidth, lane.y)`, and auto-sizes node width and height to fit content; `renderEventModel(src, target)` uses d3 data joins to draw lane bands, a dashed time axis, edges (as vertical bezier curves connecting top/bottom of nodes across lanes), and multi-section nodes with collapsible data and reads sections.
 
 Because columns are a true topological order, the horizontal position of any node is its earliest possible time given the causal edges you declared — the core property an Event Model needs.
 
@@ -213,7 +234,8 @@ The plugin skills live at [`skills/`](skills/) and the manifest at [`.claude-plu
 - `event-model-mermaid.js` — adapter that registers the DSL as a Mermaid diagram type.
 - `event-model.html` — standalone demo with a DSL textarea and Render button.
 - `event-model.js` — core ES module with `parseEventModel`, `computeRanks`, `layoutEventModel`, `drawInto`, and `renderEventModel`. Takes `d3` as a peer dependency.
-- `blueprint_dsl` — reference DSL source.
+- `blueprint_dsl` — reference DSL source (aggregate-based).
+- `blueprint_dsl_dcb` — same model rewritten in DCB style: no aggregates, with `reads [...]` clauses on commands.
 - `skills/` — Claude Code skills for DSL authoring (auto-slicing, completeness validation, demo generator).
 - `.claude-plugin/plugin.json` — Manifest that makes this repo installable as a Claude Code plugin.
 - `.claude/skills/` — symlink to `skills/` so the same skills also work as local project-scoped commands while developing in this repo.

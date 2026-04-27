@@ -21,8 +21,12 @@ import * as d3 from "d3";
 // across all lanes — the defining property of an Event Model.
 
 function parseEventModel(src) {
+  // The `:<lane>` qualifier on domainEvent is optional in DCB models (no aggregates).
+  // The optional `reads [a, b, c]` clause on commands lists past event types the
+  // command must consult for consistency — a directive to the event-sourcing
+  // framework, not a flow edge.
   const elementRe =
-    /^(ui|command|domainEvent|readModel|automation)(?::(\w+))?\s+(\w+)(?:\s*\["([^"]*)"\])?\s*(\{)?\s*$/;
+    /^(ui|command|domainEvent|readModel|automation)(?::(\w+))?\s+(\w+)(?:\s*\["([^"]*)"\])?(?:\s+reads\s*\[([^\]]*)\])?\s*(\{)?\s*$/;
   const edgeRe = /^(\w+)\s*-->\s*(\w+)$/;
   const actorRe = /^actor\s+(\w+)$/;
   const aggRe = /^aggregate\s+(\w+)$/;
@@ -71,7 +75,7 @@ function parseEventModel(src) {
       continue;
     }
     if ((m = line.match(elementRe))) {
-      const [, kind, lane, id, label, openBrace] = m;
+      const [, kind, lane, id, label, readsList, openBrace] = m;
       const fields = [];
       if (openBrace) {
         // Consume lines until closing brace.
@@ -83,7 +87,10 @@ function parseEventModel(src) {
           if (fm) fields.push({ name: fm[1], type: fm[2] });
         }
       }
-      elements.push({ id, kind, lane: lane || null, label: label || id, fields });
+      const reads = readsList
+        ? readsList.split(",").map((s) => s.trim()).filter(Boolean)
+        : [];
+      elements.push({ id, kind, lane: lane || null, label: label || id, fields, reads });
       continue;
     }
     if ((m = line.match(edgeRe))) {
@@ -181,16 +188,26 @@ function layoutEventModel(model) {
   const { actors, aggregates, elements } = model;
   const rank = computeRanks(elements, model.edges);
 
+  // DCB models declare events without an aggregate qualifier. When any such
+  // event exists, synthesize a single "Events" lane below the time lane to
+  // hold them. Aggregate-qualified events still go to their named lane.
+  const hasUnqualifiedEvents = elements.some(
+    (el) => el.kind === "domainEvent" && !el.lane
+  );
+
   const lanes = [
     ...actors.map((a) => ({ key: "actor:" + a, title: a, kind: "actor" })),
     { key: "time", title: "Time", kind: "time" },
     ...aggregates.map((a) => ({ key: "agg:" + a, title: a, kind: "aggregate" })),
+    ...(hasUnqualifiedEvents
+      ? [{ key: "events", title: "Events", kind: "events" }]
+      : []),
   ];
   const laneIndex = new Map(lanes.map((l, i) => [l.key, i]));
 
   const laneKeyOf = (el) => {
     if (el.kind === "ui" || el.kind === "automation") return "actor:" + el.lane;
-    if (el.kind === "domainEvent") return "agg:" + el.lane;
+    if (el.kind === "domainEvent") return el.lane ? "agg:" + el.lane : "events";
     return "time";
   };
 
@@ -237,7 +254,16 @@ function layoutEventModel(model) {
       }
     }
 
-    return Math.max(NODE_W_MIN, maxLabelW, maxFieldW);
+    // Width needed for the widest reads line (prefixed with "« ").
+    let maxReadW = 0;
+    if (el.reads && el.reads.length > 0) {
+      for (const r of el.reads) {
+        const rw = (r.length + 2) * FIELD_CHAR_W + FIELD_PAD;
+        if (rw > maxReadW) maxReadW = rw;
+      }
+    }
+
+    return Math.max(NODE_W_MIN, maxLabelW, maxFieldW, maxReadW);
   };
 
   // Use a uniform node width sized to the widest element.
@@ -251,11 +277,15 @@ function layoutEventModel(model) {
 
   const COL_W = NODE_W + COL_GAP;
 
-  // Per-element height: base heading + optional fields section.
+  // Per-element height: base heading + optional fields section + optional reads section.
   const nodeH = (el) => {
-    if (!el.fields || el.fields.length === 0) return NODE_H_BASE;
-    // heading section + divider + fields
-    return NODE_H_BASE + el.fields.length * FIELD_LINE_H + 4;
+    const hasFields = el.fields && el.fields.length > 0;
+    const hasReads = el.reads && el.reads.length > 0;
+    if (!hasFields && !hasReads) return NODE_H_BASE;
+    let h = NODE_H_BASE;
+    if (hasFields) h += el.fields.length * FIELD_LINE_H + 4;
+    if (hasReads) h += el.reads.length * FIELD_LINE_H + 4;
+    return h;
   };
 
   // Track the tallest stack per lane for lane sizing.
@@ -554,7 +584,8 @@ export function drawInto(svg, model, L) {
   // Wrapped labels — centered in the heading section.
   nodeG.each(function (d) {
     const hasFields = d.el.fields && d.el.fields.length > 0;
-    const headH = hasFields ? HEADING_H : d.h;
+    const hasReads = d.el.reads && d.el.reads.length > 0;
+    const headH = hasFields || hasReads ? HEADING_H : d.h;
     const lines = wrapLabel(d.el.label, 20);
     const lineH = 13;
     const startY = headH / 2 - ((lines.length - 1) * lineH) / 2;
@@ -573,10 +604,19 @@ export function drawInto(svg, model, L) {
         .text((ln) => ln);
   });
 
-  // --- Fields section (class-diagram style, below a divider) -------------
-  const withFields = nodeG.filter((d) => d.el.fields && d.el.fields.length > 0);
+  // --- Fields & reads sections (class-diagram style, below dividers) -----
+  const hasFields = (d) => d.el.fields && d.el.fields.length > 0;
+  const hasReads = (d) => d.el.reads && d.el.reads.length > 0;
+  const hasSections = (d) => hasFields(d) || hasReads(d);
+  const withSections = nodeG.filter(hasSections);
+  const withFields = nodeG.filter(hasFields);
+  const withReads = nodeG.filter(hasReads);
 
-  // Divider line between heading and fields.
+  // Y-offset where the reads section starts (after heading + optional fields).
+  const readsOffsetOf = (d) =>
+    HEADING_H + (hasFields(d) ? d.el.fields.length * FIELD_LINE_H + 4 : 0);
+
+  // Divider above the fields section.
   withFields
     .append("line")
     .attr("class", "field-divider")
@@ -587,8 +627,19 @@ export function drawInto(svg, model, L) {
     .attr("stroke", (d) => NODE_STYLES[d.el.kind].stroke)
     .attr("stroke-width", 1);
 
+  // Divider above the reads section.
+  withReads
+    .append("line")
+    .attr("class", "reads-divider")
+    .attr("x1", 0)
+    .attr("y1", readsOffsetOf)
+    .attr("x2", (d) => d.w)
+    .attr("y2", readsOffsetOf)
+    .attr("stroke", (d) => NODE_STYLES[d.el.kind].stroke)
+    .attr("stroke-width", 1);
+
   // Toggle chevron icon in the heading section.
-  const chevronG = withFields
+  const chevronG = withSections
     .append("g")
     .attr("class", "toggle-indicator")
     .attr("transform", (d) => `translate(${d.w - 16},${HEADING_H - 16})`);
@@ -627,6 +678,25 @@ export function drawInto(svg, model, L) {
         .attr("fill", "#374151")
         .attr("font-size", 10)
         .text(`${f.name}: ${f.type}`);
+    });
+  });
+
+  // Reads group: each entry prefixed with "« " to indicate a consume.
+  const readsG = withReads
+    .append("g")
+    .attr("class", "reads-section")
+    .attr("transform", (d) => `translate(0,${readsOffsetOf(d)})`);
+
+  readsG.each(function (d) {
+    const g = d3.select(this);
+    d.el.reads.forEach((r, i) => {
+      g.append("text")
+        .attr("x", 8)
+        .attr("y", 4 + (i + 1) * FIELD_LINE_H - 3)
+        .attr("fill", "#475569")
+        .attr("font-size", 10)
+        .attr("font-style", "italic")
+        .text(`« ${r}`);
     });
   });
 
@@ -711,20 +781,21 @@ export function drawInto(svg, model, L) {
 
     globalThis.__emToggleFields = function (nodeGroup) {
       const g = nodeGroup.closest(".node");
-      const fields = g.querySelector(".fields-section");
-      const divider = g.querySelector(".field-divider");
+      const collapsibles = g.querySelectorAll(
+        ".fields-section, .reads-section, .field-divider, .reads-divider"
+      );
       const chevron = g.querySelector(".toggle-indicator");
       const bgRect = g.querySelector(".node-bg");
-      const isVisible = fields.style.display !== "none";
+      // Use any one of the collapsibles to detect current state.
+      const probe = collapsibles[0];
+      const isVisible = probe && probe.style.display !== "none";
 
       if (isVisible) {
-        fields.style.display = "none";
-        divider.style.display = "none";
+        collapsibles.forEach((el) => (el.style.display = "none"));
         bgRect.setAttribute("height", bgRect.dataset.headingH);
         chevron.querySelector(".chevron-path").setAttribute("d", "M2,0 L8,5 L2,10");
       } else {
-        fields.style.display = "";
-        divider.style.display = "";
+        collapsibles.forEach((el) => (el.style.display = ""));
         bgRect.setAttribute("height", bgRect.dataset.fullH);
         chevron.querySelector(".chevron-path").setAttribute("d", "M0,2 L5,8 L10,2");
       }
@@ -738,7 +809,7 @@ export function drawInto(svg, model, L) {
   }
 
   // Store heights as data attributes and set inline onclick.
-  withFields.each(function (d) {
+  withSections.each(function (d) {
     const g = d3.select(this);
     g.select(".node-bg")
       .attr("data-heading-h", HEADING_H)
