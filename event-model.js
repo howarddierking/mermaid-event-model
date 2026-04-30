@@ -1,5 +1,15 @@
 import * as d3 from "d3";
 
+// URL of the gear icon used to render automation nodes. Resolved relative
+// to this module's URL so it works in-repo, in the published npm package,
+// and via CDN (settings.png must be listed in package.json:files).
+const AUTOMATION_IMG_URL = new URL("./settings.png", import.meta.url).href;
+
+// Automation nodes use a label strip on top and the gear image below.
+const AUTOMATION_LABEL_H = 22;
+const AUTOMATION_IMG_H = 58;
+const AUTOMATION_NODE_H = AUTOMATION_LABEL_H + AUTOMATION_IMG_H;
+
 // Event Model DSL → SVG renderer.
 //
 // Grammar (see blueprint_dsl):
@@ -279,6 +289,7 @@ function layoutEventModel(model) {
 
   // Per-element height: base heading + optional fields section + optional reads section.
   const nodeH = (el) => {
+    if (el.kind === "automation") return AUTOMATION_NODE_H;
     const hasFields = el.fields && el.fields.length > 0;
     const hasReads = el.reads && el.reads.length > 0;
     if (!hasFields && !hasReads) return NODE_H_BASE;
@@ -363,7 +374,7 @@ const NODE_STYLES = {
   command:     { fill: "#60a5fa", stroke: "#1e3a8a", dash: null },
   domainEvent: { fill: "#fb923c", stroke: "#7c2d12", dash: null },
   readModel:   { fill: "#86efac", stroke: "#14532d", dash: null },
-  automation:  { fill: "#ffffff", stroke: "#475569", dash: "4 2" },
+  automation:  { fill: "transparent", stroke: "none", dash: null },
 };
 
 export function renderEventModel(src, target) {
@@ -571,21 +582,30 @@ export function drawInto(svg, model, L) {
     .attr("y2", 10)
     .attr("stroke", "#94a3b8");
 
-  // Automation gear glyph.
+  // Automation gear image: fills the area below the label strip. The image
+  // preserves its 1:1 aspect ratio centered within the box, so wide
+  // automation nodes show a square gear with horizontal whitespace.
   nodeG
     .filter((d) => d.el.kind === "automation")
-    .append("text")
-    .attr("x", (d) => d.w - 10)
-    .attr("y", 16)
-    .attr("text-anchor", "end")
-    .attr("font-size", 12)
-    .text("⚙");
+    .append("image")
+    .attr("href", AUTOMATION_IMG_URL)
+    .attr("x", 4)
+    .attr("y", AUTOMATION_LABEL_H)
+    .attr("width", (d) => d.w - 8)
+    .attr("height", (d) => d.h - AUTOMATION_LABEL_H - 4)
+    .attr("preserveAspectRatio", "xMidYMid meet");
 
-  // Wrapped labels — centered in the heading section.
+  // Wrapped labels — centered in the heading section, or in the top label
+  // strip for automation nodes (so the label sits above the gear image).
   nodeG.each(function (d) {
     const hasFields = d.el.fields && d.el.fields.length > 0;
     const hasReads = d.el.reads && d.el.reads.length > 0;
-    const headH = hasFields || hasReads ? HEADING_H : d.h;
+    const isAutomation = d.el.kind === "automation";
+    const headH = isAutomation
+      ? AUTOMATION_LABEL_H
+      : hasFields || hasReads
+      ? HEADING_H
+      : d.h;
     const lines = wrapLabel(d.el.label, 20);
     const lineH = 13;
     const startY = headH / 2 - ((lines.length - 1) * lineH) / 2;

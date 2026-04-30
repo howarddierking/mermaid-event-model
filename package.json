@@ -11,6 +11,7 @@
   "files": [
     "event-model.js",
     "event-model-mermaid.js",
+    "settings.png",
     "README.md",
     "LICENSE"
   ],
