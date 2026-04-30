@@ -279,6 +279,55 @@ function expandReadModelDuplicates(elements, edges, rank) {
   return { elements: newElements, edges: newEdges, dupeMap };
 }
 
+// Collapse pairs of stubs (original or duplicate) of the same read model
+// that landed at directly adjacent columns into a single stub that takes
+// both incoming edges. Only pairs are merged — longer runs (3+) are
+// treated as intentional dense fan-in clusters and left alone, since
+// merging them produces longer arcs than the multi-stub layout. When the
+// pair includes the original, the original is kept (preserving its
+// solid-styled anchor); otherwise the rightmost duplicate is kept.
+function mergeAdjacentStubPairs(elements, edges, rank, dupeMap) {
+  for (const info of dupeMap.values()) {
+    const stubs = [
+      { id: info.originalId, isOriginal: true },
+      ...info.duplicates.map((d) => ({ id: d.id, isOriginal: false })),
+    ];
+    const withCol = stubs
+      .map((s) => ({ ...s, col: rank.get(s.id) }))
+      .filter((s) => s.col !== undefined)
+      .sort((a, b) => a.col - b.col);
+    if (withCol.length < 2) continue;
+
+    // Group into runs of consecutive columns.
+    const runs = [[withCol[0]]];
+    for (let i = 1; i < withCol.length; i++) {
+      if (withCol[i].col === withCol[i - 1].col + 1) {
+        runs[runs.length - 1].push(withCol[i]);
+      } else {
+        runs.push([withCol[i]]);
+      }
+    }
+
+    for (const run of runs) {
+      if (run.length !== 2) continue; // only collapse pairs
+      const keeper = run.find((s) => s.isOriginal) || run[run.length - 1];
+      const removed = run.filter((s) => s.id !== keeper.id);
+      for (const r of removed) {
+        for (let j = 0; j < edges.length; j++) {
+          if (edges[j].to === r.id) {
+            edges[j] = { from: edges[j].from, to: keeper.id };
+          } else if (edges[j].from === r.id) {
+            edges[j] = { from: keeper.id, to: edges[j].to };
+          }
+        }
+        const idx = elements.findIndex((el) => el.id === r.id);
+        if (idx >= 0) elements.splice(idx, 1);
+        rank.delete(r.id);
+      }
+    }
+  }
+}
+
 // Renumber column ranks to consecutive integers, removing any gaps left by
 // manual overrides (e.g. when a read model is shifted leftward into its first
 // source's column, the column it previously occupied becomes empty).
@@ -314,7 +363,12 @@ function layoutEventModel(model) {
     }
   }
 
-  // 4. Pack columns to close gaps left by the overrides.
+  // 4. Collapse pairs of same-read-model stubs that ended up at directly
+  //    adjacent columns (cuts visual noise in sparse fan-ins). Runs of 3+
+  //    are left alone so dense fan-ins keep their per-event stubs.
+  mergeAdjacentStubPairs(elements, edges, rank, dupeMap);
+
+  // 5. Pack columns to close gaps left by the overrides and merges.
   packColumns(rank);
 
   // DCB models declare events without an aggregate qualifier. When any such
