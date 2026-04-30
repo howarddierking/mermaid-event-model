@@ -16,8 +16,9 @@ eventModel
 		email: string
 		signedUpAt: timestamp
 	}
-	signup_ui-->signUp
-	signUp-->signedUp
+	slice sign_up["Sign Up"]
+		signup_ui-->signUp
+		signUp-->signedUp
 
 	ui:Customer login_ui["Log In"]
 	command logIn["Log In"]
@@ -26,8 +27,9 @@ eventModel
 		ipAddress: string
 		loggedInAt: timestamp
 	}
-	login_ui-->logIn
-	logIn-->loggedIn
+	slice log_in["Log In"]
+		login_ui-->logIn
+		logIn-->loggedIn
 
 	automation:Customer emailVerifier["Email Verifier"]
 	command verifyEmail["Verify Email"]
@@ -36,8 +38,9 @@ eventModel
 		email: string
 		verifiedAt: timestamp
 	}
-	emailVerifier-->verifyEmail
-	verifyEmail-->emailVerified
+	slice verify_email["Verify Email"]
+		emailVerifier-->verifyEmail
+		verifyEmail-->emailVerified
 
 	ui:Customer password_ui["Change Password"]
 	command changePassword["Change Password"]
@@ -45,8 +48,9 @@ eventModel
 		customerId: UUID
 		changedAt: timestamp
 	}
-	password_ui-->changePassword
-	changePassword-->passwordChanged
+	slice change_password["Change Password"]
+		password_ui-->changePassword
+		changePassword-->passwordChanged
 
 	%% --- Profile ---
 	ui:Customer profile_ui["Edit Profile"]
@@ -56,8 +60,9 @@ eventModel
 		fieldsChanged: string
 		updatedAt: timestamp
 	}
-	profile_ui-->updateProfile
-	updateProfile-->profileUpdated
+	slice update_profile["Update Profile"]
+		profile_ui-->updateProfile
+		updateProfile-->profileUpdated
 
 	ui:Customer address_ui["Add Address"]
 	command addAddress["Add Address"]
@@ -67,8 +72,9 @@ eventModel
 		addressType: string
 		addedAt: timestamp
 	}
-	address_ui-->addAddress
-	addAddress-->addressAdded
+	slice add_address["Add Address"]
+		address_ui-->addAddress
+		addAddress-->addressAdded
 
 	%% --- Order ---
 	ui:Customer order_ui["Place Order"]
@@ -79,8 +85,9 @@ eventModel
 		total: decimal
 		placedAt: timestamp
 	}
-	order_ui-->placeOrder
-	placeOrder-->orderPlaced
+	slice place_order["Place Order"]
+		order_ui-->placeOrder
+		placeOrder-->orderPlaced
 
 	ui:Admin ship_ui["Ship Order"]
 	command shipOrder["Ship Order"]
@@ -90,8 +97,9 @@ eventModel
 		carrier: string
 		shippedAt: timestamp
 	}
-	ship_ui-->shipOrder
-	shipOrder-->orderShipped
+	slice ship_order["Ship Order"]
+		ship_ui-->shipOrder
+		shipOrder-->orderShipped
 
 	automation:Admin deliveryTracker["Delivery Tracker"]
 	command markDelivered["Mark Delivered"]
@@ -100,8 +108,9 @@ eventModel
 		orderId: UUID
 		deliveredAt: timestamp
 	}
-	deliveryTracker-->markDelivered
-	markDelivered-->orderDelivered
+	slice mark_delivered["Mark Delivered"]
+		deliveryTracker-->markDelivered
+		markDelivered-->orderDelivered
 
 	ui:Customer return_ui["Return Order"]
 	command returnOrder["Return Order"]
@@ -111,8 +120,9 @@ eventModel
 		reason: string
 		returnedAt: timestamp
 	}
-	return_ui-->returnOrder
-	returnOrder-->orderReturned
+	slice return_order["Return Order"]
+		return_ui-->returnOrder
+		returnOrder-->orderReturned
 
 	%% --- Payment ---
 	automation:Customer paymentRunner["Payment Runner"]
@@ -123,8 +133,9 @@ eventModel
 		amount: decimal
 		processedAt: timestamp
 	}
-	paymentRunner-->processPayment
-	processPayment-->paymentProcessed
+	slice process_payment["Process Payment"]
+		paymentRunner-->processPayment
+		processPayment-->paymentProcessed
 
 	ui:Admin refund_ui["Issue Refund"]
 	command issueRefund["Issue Refund"]
@@ -134,8 +145,9 @@ eventModel
 		amount: decimal
 		issuedAt: timestamp
 	}
-	refund_ui-->issueRefund
-	issueRefund-->refundIssued
+	slice issue_refund["Issue Refund"]
+		refund_ui-->issueRefund
+		issueRefund-->refundIssued
 
 	%% --- Support ---
 	ui:Customer ticket_ui["Open Ticket"]
@@ -146,8 +158,9 @@ eventModel
 		subject: string
 		openedAt: timestamp
 	}
-	ticket_ui-->openTicket
-	openTicket-->ticketOpened
+	slice open_ticket["Open Ticket"]
+		ticket_ui-->openTicket
+		openTicket-->ticketOpened
 
 	ui:Admin resolve_ui["Resolve Ticket"]
 	command resolveTicket["Resolve Ticket"]
@@ -157,8 +170,9 @@ eventModel
 		resolution: string
 		resolvedAt: timestamp
 	}
-	resolve_ui-->resolveTicket
-	resolveTicket-->ticketResolved
+	slice resolve_ticket["Resolve Ticket"]
+		resolve_ui-->resolveTicket
+		resolveTicket-->ticketResolved
 
 	ui:Customer review_ui["Write Review"]
 	command postReview["Post Review"]
@@ -168,8 +182,9 @@ eventModel
 		rating: int
 		postedAt: timestamp
 	}
-	review_ui-->postReview
-	postReview-->reviewPosted
+	slice post_review["Post Review"]
+		review_ui-->postReview
+		postReview-->reviewPosted
 
 	%% --- Loyalty ---
 	automation:Customer loyaltyEngine["Loyalty Engine"]
@@ -180,8 +195,9 @@ eventModel
 		reason: string
 		earnedAt: timestamp
 	}
-	loyaltyEngine-->awardPoints
-	awardPoints-->pointsEarned
+	slice award_points["Award Points"]
+		loyaltyEngine-->awardPoints
+		awardPoints-->pointsEarned
 
 	%% --- Read model: fan-in target ---
 	readModel activityFeed["Customer Activity Timeline"] {
@@ -193,22 +209,54 @@ eventModel
 		linkedEntityId: UUID
 	}
 
-	signedUp-->activityFeed
-	loggedIn-->activityFeed
-	emailVerified-->activityFeed
-	passwordChanged-->activityFeed
-	profileUpdated-->activityFeed
-	addressAdded-->activityFeed
-	orderPlaced-->activityFeed
-	orderShipped-->activityFeed
-	orderDelivered-->activityFeed
-	orderReturned-->activityFeed
-	paymentProcessed-->activityFeed
-	refundIssued-->activityFeed
-	ticketOpened-->activityFeed
-	ticketResolved-->activityFeed
-	reviewPosted-->activityFeed
-	pointsEarned-->activityFeed
+	%% --- Per-event read slices (event → activityFeed) ---
+	slice feed_signup["Feed: Signed Up"]
+		signedUp-->activityFeed
+
+	slice feed_login["Feed: Logged In"]
+		loggedIn-->activityFeed
+
+	slice feed_email_verified["Feed: Email Verified"]
+		emailVerified-->activityFeed
+
+	slice feed_password_changed["Feed: Password Changed"]
+		passwordChanged-->activityFeed
+
+	slice feed_profile_updated["Feed: Profile Updated"]
+		profileUpdated-->activityFeed
+
+	slice feed_address_added["Feed: Address Added"]
+		addressAdded-->activityFeed
+
+	slice feed_order_placed["Feed: Order Placed"]
+		orderPlaced-->activityFeed
+
+	slice feed_order_shipped["Feed: Order Shipped"]
+		orderShipped-->activityFeed
+
+	slice feed_order_delivered["Feed: Order Delivered"]
+		orderDelivered-->activityFeed
+
+	slice feed_order_returned["Feed: Order Returned"]
+		orderReturned-->activityFeed
+
+	slice feed_payment_processed["Feed: Payment Processed"]
+		paymentProcessed-->activityFeed
+
+	slice feed_refund_issued["Feed: Refund Issued"]
+		refundIssued-->activityFeed
+
+	slice feed_ticket_opened["Feed: Ticket Opened"]
+		ticketOpened-->activityFeed
+
+	slice feed_ticket_resolved["Feed: Ticket Resolved"]
+		ticketResolved-->activityFeed
+
+	slice feed_review_posted["Feed: Review Posted"]
+		reviewPosted-->activityFeed
+
+	slice feed_points_earned["Feed: Points Earned"]
+		pointsEarned-->activityFeed
 
 	ui:Admin activity_ui["Activity Timeline"] {
 		customerId: UUID
@@ -216,4 +264,5 @@ eventModel
 		summary: string
 		occurredAt: timestamp
 	}
-	activityFeed-->activity_ui
+	slice view_activity_feed["View Activity Feed"]
+		activityFeed-->activity_ui

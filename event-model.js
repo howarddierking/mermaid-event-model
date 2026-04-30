@@ -337,6 +337,40 @@ function packColumns(rank) {
   for (const [k, v] of rank) rank.set(k, map.get(v));
 }
 
+// Slices are declared against the original DSL edges. After read-model
+// duplication, those declared edges may have been rerouted (incoming to a
+// duplicate, outgoing from the rightmost duplicate). Rewrite each slice's
+// nodeIds to reference the actually-rendered endpoints, so bounding boxes
+// snap to what's drawn instead of stretching back to the original.
+function rewriteSliceNodeIdsForDuplicates(slices, edges, dupeMap) {
+  if (!slices || slices.length === 0) return;
+  if (!dupeMap || dupeMap.size === 0) return;
+
+  const originalByDup = new Map();
+  for (const info of dupeMap.values()) {
+    for (const d of info.duplicates) originalByDup.set(d.id, info.originalId);
+  }
+  const sameOrAlias = (actualId, declaredId) =>
+    actualId === declaredId || originalByDup.get(actualId) === declaredId;
+
+  for (const slice of slices) {
+    const nodes = new Set();
+    for (const sliceEdge of slice.edges) {
+      const match = edges.find(
+        (e) => sameOrAlias(e.from, sliceEdge.from) && sameOrAlias(e.to, sliceEdge.to)
+      );
+      if (match) {
+        nodes.add(match.from);
+        nodes.add(match.to);
+      } else {
+        nodes.add(sliceEdge.from);
+        nodes.add(sliceEdge.to);
+      }
+    }
+    slice.nodeIds = [...nodes];
+  }
+}
+
 function layoutEventModel(model) {
   const { actors, aggregates } = model;
 
@@ -370,6 +404,10 @@ function layoutEventModel(model) {
 
   // 5. Pack columns to close gaps left by the overrides and merges.
   packColumns(rank);
+
+  // 6. Rewrite each slice's nodeIds to reference the actually-rendered
+  //    endpoints (duplicates instead of originals where edges were rerouted).
+  rewriteSliceNodeIdsForDuplicates(model.slices, edges, dupeMap);
 
   // DCB models declare events without an aggregate qualifier. When any such
   // event exists, synthesize a single "Events" lane below the time lane to
@@ -524,28 +562,54 @@ function layoutEventModel(model) {
     }
   }
 
-  // Compute bounding boxes for each slice from its member nodes.
+  // Compute bounding boxes for each slice. When a slice's members form
+  // distant column clusters (e.g. a per-event read slice with the event on
+  // the left and the consuming UI on the right of a fan-in pattern), emit
+  // ONE box per cluster so the slice doesn't stretch across the whole
+  // diagram. The slice label appears on the leftmost cluster only.
   const SLICE_PAD = 10;
   const SLICE_LABEL_H = 20;
+  const SLICE_CLUSTER_GAP = 3; // cols of empty space that triggers a split
   const sliceRects = [];
   for (const s of model.slices || []) {
-    const memberPositions = s.nodeIds.map((id) => pos.get(id)).filter(Boolean);
-    if (memberPositions.length === 0) continue;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const p of memberPositions) {
-      if (p.x < minX) minX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.x + p.w > maxX) maxX = p.x + p.w;
-      if (p.y + p.h > maxY) maxY = p.y + p.h;
+    const members = s.nodeIds
+      .map((id) => ({ pos: pos.get(id), col: rank.get(id) }))
+      .filter((m) => m.pos && m.col !== undefined)
+      .sort((a, b) => a.col - b.col);
+    if (members.length === 0) continue;
+
+    // Group consecutive members into clusters separated by column gaps.
+    const clusters = [[members[0]]];
+    for (let i = 1; i < members.length; i++) {
+      const lastCol = clusters[clusters.length - 1].slice(-1)[0].col;
+      if (members[i].col - lastCol < SLICE_CLUSTER_GAP) {
+        clusters[clusters.length - 1].push(members[i]);
+      } else {
+        clusters.push([members[i]]);
+      }
     }
-    sliceRects.push({
-      id: s.id,
-      label: s.label,
-      x: minX - SLICE_PAD,
-      y: minY - SLICE_PAD - SLICE_LABEL_H,
-      w: (maxX - minX) + SLICE_PAD * 2,
-      h: (maxY - minY) + SLICE_PAD * 2 + SLICE_LABEL_H,
-      labelH: SLICE_LABEL_H,
+
+    clusters.forEach((cluster, idx) => {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const m of cluster) {
+        const p = m.pos;
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x + p.w > maxX) maxX = p.x + p.w;
+        if (p.y + p.h > maxY) maxY = p.y + p.h;
+      }
+      const isLeading = idx === 0;
+      const headPad = isLeading ? SLICE_LABEL_H : 0;
+      sliceRects.push({
+        id: clusters.length > 1 ? `${s.id}__c${idx}` : s.id,
+        sliceId: s.id,
+        label: isLeading ? s.label : "",
+        x: minX - SLICE_PAD,
+        y: minY - SLICE_PAD - headPad,
+        w: (maxX - minX) + SLICE_PAD * 2,
+        h: (maxY - minY) + SLICE_PAD * 2 + headPad,
+        labelH: SLICE_LABEL_H,
+      });
     });
   }
 

@@ -67,7 +67,11 @@ These represent **read-side** behavior: state is projected and presented.
 ## Slice boundary rules
 
 - A single domain event may appear in BOTH a command slice (as the output) and a read slice (as the input). This is correct — the event is the hinge point between write and read sides.
-- Read models that feed into a UI or automation MUST include that consumer in the slice. A read slice of `event → readModel` without the consuming UI is incomplete.
+- Read models that feed into a UI or automation usually include that consumer in the slice. A read slice of `event → readModel` followed by `readModel → ui` is a single connected flow and should be one slice — EXCEPT in the fan-in case below.
+- **Fan-in read models (≥2 incoming domain/external event edges):** the renderer draws this pattern with one stub per producing event. Bundling each event chain through to the consumer would produce N overlapping slices that span from each event all the way to the consumer. Instead, split it:
+  - One **per-event read slice** for each `event → readModel` edge (no consumer in this slice). Name these like `feed_<event>` or `update_<readmodel>_<event>`.
+  - One **view slice** containing the single `readModel → ui/automation` edge. Name this like `view_<readmodel>`.
+  This produces N+1 slices total instead of N wide ones, and each one is compact.
 - Automation loops (e.g., `readModel → automation → command → event → readModel`) should be split into a read slice (readModel → automation) and a command slice (automation → command → event).
 - If an edge connects two elements across what would be different slices (e.g., a domain event feeding a read model that's part of a different flow), that edge forms its own read slice or extends an existing one.
 
