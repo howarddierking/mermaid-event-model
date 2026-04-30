@@ -189,6 +189,11 @@ eventModel
 	paymentRequested-->paymentsToProcess
 
 	automation:Guest paymentProcessor["Payment Processor"]
+	externalEvent gatewayConfirmed["Gateway Confirmed"] {
+		paymentId: UUID
+		transactionRef: string
+		confirmedAt: timestamp
+	}
 	command processPayment["Process Payment"] reads [paymentRequested, paymentSucceeded] {
 		paymentId: UUID
 		gatewayRef: string
@@ -202,6 +207,7 @@ eventModel
 	}
 	paymentsToProcess-->paymentProcessor
 	paymentProcessor-->processPayment
+	gatewayConfirmed-->processPayment
 	processPayment-->paymentSucceeded
 	paymentSucceeded-->paymentsToProcess
 

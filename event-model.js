@@ -35,8 +35,11 @@ function parseEventModel(src) {
   // The optional `reads [a, b, c]` clause on commands lists past event types the
   // command must consult for consistency — a directive to the event-sourcing
   // framework, not a flow edge.
+  // `externalEvent` is a fact originating outside the system (e.g. a webhook
+  // from a third-party service); it sits in a synthesized `External` lane
+  // above the actor lanes.
   const elementRe =
-    /^(ui|command|domainEvent|readModel|automation)(?::(\w+))?\s+(\w+)(?:\s*\["([^"]*)"\])?(?:\s+reads\s*\[([^\]]*)\])?\s*(\{)?\s*$/;
+    /^(ui|command|domainEvent|externalEvent|readModel|automation)(?::(\w+))?\s+(\w+)(?:\s*\["([^"]*)"\])?(?:\s+reads\s*\[([^\]]*)\])?\s*(\{)?\s*$/;
   const edgeRe = /^(\w+)\s*-->\s*(\w+)$/;
   const actorRe = /^actor\s+(\w+)$/;
   const aggRe = /^aggregate\s+(\w+)$/;
@@ -205,7 +208,16 @@ function layoutEventModel(model) {
     (el) => el.kind === "domainEvent" && !el.lane
   );
 
+  // External events (facts originating outside the system) live in a
+  // synthesized lane at the very top of the stack, above all actors.
+  const hasExternalEvents = elements.some(
+    (el) => el.kind === "externalEvent"
+  );
+
   const lanes = [
+    ...(hasExternalEvents
+      ? [{ key: "external", title: "External", kind: "external" }]
+      : []),
     ...actors.map((a) => ({ key: "actor:" + a, title: a, kind: "actor" })),
     { key: "time", title: "Time", kind: "time" },
     ...aggregates.map((a) => ({ key: "agg:" + a, title: a, kind: "aggregate" })),
@@ -218,6 +230,7 @@ function layoutEventModel(model) {
   const laneKeyOf = (el) => {
     if (el.kind === "ui" || el.kind === "automation") return "actor:" + el.lane;
     if (el.kind === "domainEvent") return el.lane ? "agg:" + el.lane : "events";
+    if (el.kind === "externalEvent") return "external";
     return "time";
   };
 
@@ -370,11 +383,12 @@ function layoutEventModel(model) {
 }
 
 const NODE_STYLES = {
-  ui:          { fill: "#ffffff", stroke: "#475569", dash: null },
-  command:     { fill: "#60a5fa", stroke: "#1e3a8a", dash: null },
-  domainEvent: { fill: "#fb923c", stroke: "#7c2d12", dash: null },
-  readModel:   { fill: "#86efac", stroke: "#14532d", dash: null },
-  automation:  { fill: "transparent", stroke: "none", dash: null },
+  ui:            { fill: "#ffffff", stroke: "#475569", dash: null },
+  command:       { fill: "#60a5fa", stroke: "#1e3a8a", dash: null },
+  domainEvent:   { fill: "#fb923c", stroke: "#7c2d12", dash: null },
+  externalEvent: { fill: "#fbf3a8", stroke: "#854d0e", dash: null },
+  readModel:     { fill: "#86efac", stroke: "#14532d", dash: null },
+  automation:    { fill: "transparent", stroke: "none", dash: null },
 };
 
 export function renderEventModel(src, target) {

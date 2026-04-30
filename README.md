@@ -93,6 +93,7 @@ eventModel
     ui:<Actor>            <id>["Label"]
     command               <id>["Label"] [reads [<event>, ...]]
     domainEvent[:<Agg>]   <id>["Label"]
+    externalEvent         <id>["Label"]
     readModel             <id>["Label"]
     automation:<Actor>    <id>["Label"]
 
@@ -107,6 +108,7 @@ eventModel
 - **ui** — a screen owned by an actor; placed in that actor's lane.
 - **command** — an intent issued from a UI or automation; placed in the Time lane.
 - **domainEvent** — a fact emitted by an aggregate; placed in that aggregate's lane. If the `:<Aggregate>` qualifier is omitted, the event lands in a synthesized `Events` lane below `Time`.
+- **externalEvent** — a fact originating outside the system (e.g. a webhook from a third-party service or a partner integration). Placed in a synthesized `External` lane at the very top of the diagram, above all actor lanes. Rendered with a pale-yellow fill to distinguish from internal domain events.
 - **readModel** — a projection read by UIs or automations; placed in the Time lane.
 - **automation** — an automated process owned by an actor; placed in that actor's lane.
 - **-->** — a flow edge. The canonical pattern is `ui → command → domainEvent → readModel → (ui | automation)`.
@@ -115,7 +117,7 @@ Labels are optional; if omitted, the identifier is used as the label.
 
 ### Data sections
 
-Commands, domain events, UIs, and read models can include a brace-delimited data section listing typed fields — similar to a Mermaid class diagram:
+Commands, domain events, external events, UIs, and read models can include a brace-delimited data section listing typed fields — similar to a Mermaid class diagram:
 
 ```
 command bookRoom["Book Room"] {
@@ -202,7 +204,7 @@ The renderer (`event-model.js`) has three stages:
 
 1. **Parse** — `parseEventModel(src)` reads the DSL into `{ actors, aggregates, elements, edges, slices }`. Each element carries optional `fields` (data section) and `reads` (DCB consume list).
 2. **Rank** — `computeRanks` runs a DFS to identify back-edges (so cycles like `paymentSucceeded ↔ paymentsToProcess` don't blow up), then performs Kahn's topological sort of the forward DAG with declaration order as the tiebreaker. Each element gets a unique column — no two elements share an x-position, even across lanes. `reads` is ignored at this stage since it isn't a flow edge.
-3. **Layout + draw** — `layoutEventModel` builds the lane stack (actors → Time → aggregates, plus a synthesized `Events` lane when any `domainEvent` lacks an aggregate qualifier), places each element at `(column × colWidth, lane.y)`, and auto-sizes node width and height to fit content; `renderEventModel(src, target)` uses d3 data joins to draw lane bands, a dashed time axis, edges (as vertical bezier curves connecting top/bottom of nodes across lanes), and multi-section nodes with collapsible data and reads sections.
+3. **Layout + draw** — `layoutEventModel` builds the lane stack (an optional `External` lane on top → actors → Time → aggregates → an optional `Events` lane on the bottom; the two synthesized lanes only appear when the model contains an `externalEvent` or an unqualified `domainEvent`, respectively), places each element at `(column × colWidth, lane.y)`, and auto-sizes node width and height to fit content; `renderEventModel(src, target)` uses d3 data joins to draw lane bands, a dashed time axis, edges (as vertical bezier curves connecting top/bottom of nodes across lanes), and multi-section nodes with collapsible data and reads sections.
 
 Because columns are a true topological order, the horizontal position of any node is its earliest possible time given the causal edges you declared — the core property an Event Model needs.
 

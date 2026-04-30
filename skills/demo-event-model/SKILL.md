@@ -41,6 +41,7 @@ A complete hotel-booking event model that exercises every DSL feature:
 - **UIs** with data sections: Registration, Room Management, Booking, Maintenance, Check-in, Payment, Sales Report
 - **Commands** with data sections: Register, Add Room, Book Room, Ready Room, Check-in, Checked Out, Pay, Process Payment, and a fieldless `hotelProximityTranslator`
 - **Domain events** with data sections: Registered, Room Added, Room Booked, Room Readied, Checked In, Position Updated, Guest Left Hotel, Checked Out, Payment Requested, Payment Succeeded
+- **External events** with data sections: Gateway Confirmed (a payment-gateway webhook that feeds into `processPayment`)
 - **Read models** with data sections: Room Availability, Cleaning Schedule, Guest Roster, Payments to Process, Sales Report
 - **Automations**: Check-out Automation (Manager), Payment Processor (Guest)
 - **Slices** covering every edge in the model (16 slices total), demonstrating both command slices (ui/automation → command → event) and read slices (event → readModel → ui/automation)

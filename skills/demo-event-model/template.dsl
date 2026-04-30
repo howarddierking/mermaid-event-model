@@ -56,7 +56,7 @@ eventModel
 	slice addroom_slice["Add Room"]
 		room_ui-->addRoom
 		addRoom-->ra
-
+	
 	slice show_availability["Show Availability"]
 		ra-->avail
 		avail-->booking_ui
@@ -220,6 +220,11 @@ eventModel
 		paymentRequested-->paymentsToProcess
 
 	automation:Guest paymentProcessor["Payment Processor"]
+	externalEvent gatewayConfirmed["Gateway Confirmed"] {
+		paymentId: UUID
+		transactionRef: string
+		confirmedAt: timestamp
+	}
 	command processPayment["Process Payment"] {
 		paymentId: UUID
 		gatewayRef: string
@@ -237,6 +242,7 @@ eventModel
 
 	slice process_payment["Process Payment"]
 		paymentProcessor-->processPayment
+		gatewayConfirmed-->processPayment
 		processPayment-->paymentSucceeded
 
 	slice update_payment_status["Update Payment Status"]
@@ -258,3 +264,4 @@ eventModel
 	slice view_sales_report["View Sales Report"]
 		paymentSucceeded-->salesReport
 		salesReport-->sales_ui
+	
