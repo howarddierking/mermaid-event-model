@@ -1,0 +1,219 @@
+eventModel
+	actor Customer
+	actor Admin
+	aggregate Auth
+	aggregate Profile
+	aggregate Order
+	aggregate Payment
+	aggregate Support
+	aggregate Loyalty
+
+	%% --- Auth ---
+	ui:Customer signup_ui["Sign Up"]
+	command signUp["Sign Up"]
+	domainEvent:Auth signedUp["Signed Up"] {
+		customerId: UUID
+		email: string
+		signedUpAt: timestamp
+	}
+	signup_ui-->signUp
+	signUp-->signedUp
+
+	ui:Customer login_ui["Log In"]
+	command logIn["Log In"]
+	domainEvent:Auth loggedIn["Logged In"] {
+		customerId: UUID
+		ipAddress: string
+		loggedInAt: timestamp
+	}
+	login_ui-->logIn
+	logIn-->loggedIn
+
+	automation:Customer emailVerifier["Email Verifier"]
+	command verifyEmail["Verify Email"]
+	domainEvent:Auth emailVerified["Email Verified"] {
+		customerId: UUID
+		email: string
+		verifiedAt: timestamp
+	}
+	emailVerifier-->verifyEmail
+	verifyEmail-->emailVerified
+
+	ui:Customer password_ui["Change Password"]
+	command changePassword["Change Password"]
+	domainEvent:Auth passwordChanged["Password Changed"] {
+		customerId: UUID
+		changedAt: timestamp
+	}
+	password_ui-->changePassword
+	changePassword-->passwordChanged
+
+	%% --- Profile ---
+	ui:Customer profile_ui["Edit Profile"]
+	command updateProfile["Update Profile"]
+	domainEvent:Profile profileUpdated["Profile Updated"] {
+		customerId: UUID
+		fieldsChanged: string
+		updatedAt: timestamp
+	}
+	profile_ui-->updateProfile
+	updateProfile-->profileUpdated
+
+	ui:Customer address_ui["Add Address"]
+	command addAddress["Add Address"]
+	domainEvent:Profile addressAdded["Address Added"] {
+		customerId: UUID
+		addressId: UUID
+		addressType: string
+		addedAt: timestamp
+	}
+	address_ui-->addAddress
+	addAddress-->addressAdded
+
+	%% --- Order ---
+	ui:Customer order_ui["Place Order"]
+	command placeOrder["Place Order"]
+	domainEvent:Order orderPlaced["Order Placed"] {
+		customerId: UUID
+		orderId: UUID
+		total: decimal
+		placedAt: timestamp
+	}
+	order_ui-->placeOrder
+	placeOrder-->orderPlaced
+
+	ui:Admin ship_ui["Ship Order"]
+	command shipOrder["Ship Order"]
+	domainEvent:Order orderShipped["Order Shipped"] {
+		customerId: UUID
+		orderId: UUID
+		carrier: string
+		shippedAt: timestamp
+	}
+	ship_ui-->shipOrder
+	shipOrder-->orderShipped
+
+	automation:Admin deliveryTracker["Delivery Tracker"]
+	command markDelivered["Mark Delivered"]
+	domainEvent:Order orderDelivered["Order Delivered"] {
+		customerId: UUID
+		orderId: UUID
+		deliveredAt: timestamp
+	}
+	deliveryTracker-->markDelivered
+	markDelivered-->orderDelivered
+
+	ui:Customer return_ui["Return Order"]
+	command returnOrder["Return Order"]
+	domainEvent:Order orderReturned["Order Returned"] {
+		customerId: UUID
+		orderId: UUID
+		reason: string
+		returnedAt: timestamp
+	}
+	return_ui-->returnOrder
+	returnOrder-->orderReturned
+
+	%% --- Payment ---
+	automation:Customer paymentRunner["Payment Runner"]
+	command processPayment["Process Payment"]
+	domainEvent:Payment paymentProcessed["Payment Processed"] {
+		customerId: UUID
+		paymentId: UUID
+		amount: decimal
+		processedAt: timestamp
+	}
+	paymentRunner-->processPayment
+	processPayment-->paymentProcessed
+
+	ui:Admin refund_ui["Issue Refund"]
+	command issueRefund["Issue Refund"]
+	domainEvent:Payment refundIssued["Refund Issued"] {
+		customerId: UUID
+		refundId: UUID
+		amount: decimal
+		issuedAt: timestamp
+	}
+	refund_ui-->issueRefund
+	issueRefund-->refundIssued
+
+	%% --- Support ---
+	ui:Customer ticket_ui["Open Ticket"]
+	command openTicket["Open Ticket"]
+	domainEvent:Support ticketOpened["Ticket Opened"] {
+		customerId: UUID
+		ticketId: UUID
+		subject: string
+		openedAt: timestamp
+	}
+	ticket_ui-->openTicket
+	openTicket-->ticketOpened
+
+	ui:Admin resolve_ui["Resolve Ticket"]
+	command resolveTicket["Resolve Ticket"]
+	domainEvent:Support ticketResolved["Ticket Resolved"] {
+		customerId: UUID
+		ticketId: UUID
+		resolution: string
+		resolvedAt: timestamp
+	}
+	resolve_ui-->resolveTicket
+	resolveTicket-->ticketResolved
+
+	ui:Customer review_ui["Write Review"]
+	command postReview["Post Review"]
+	domainEvent:Support reviewPosted["Review Posted"] {
+		customerId: UUID
+		reviewId: UUID
+		rating: int
+		postedAt: timestamp
+	}
+	review_ui-->postReview
+	postReview-->reviewPosted
+
+	%% --- Loyalty ---
+	automation:Customer loyaltyEngine["Loyalty Engine"]
+	command awardPoints["Award Points"]
+	domainEvent:Loyalty pointsEarned["Points Earned"] {
+		customerId: UUID
+		points: int
+		reason: string
+		earnedAt: timestamp
+	}
+	loyaltyEngine-->awardPoints
+	awardPoints-->pointsEarned
+
+	%% --- Read model: fan-in target ---
+	readModel activityFeed["Customer Activity Timeline"] {
+		customerId: UUID
+		eventType: string
+		summary: string
+		occurredAt: timestamp
+		severity: string
+		linkedEntityId: UUID
+	}
+
+	signedUp-->activityFeed
+	loggedIn-->activityFeed
+	emailVerified-->activityFeed
+	passwordChanged-->activityFeed
+	profileUpdated-->activityFeed
+	addressAdded-->activityFeed
+	orderPlaced-->activityFeed
+	orderShipped-->activityFeed
+	orderDelivered-->activityFeed
+	orderReturned-->activityFeed
+	paymentProcessed-->activityFeed
+	refundIssued-->activityFeed
+	ticketOpened-->activityFeed
+	ticketResolved-->activityFeed
+	reviewPosted-->activityFeed
+	pointsEarned-->activityFeed
+
+	ui:Admin activity_ui["Activity Timeline"] {
+		customerId: UUID
+		eventType: string
+		summary: string
+		occurredAt: timestamp
+	}
+	activityFeed-->activity_ui

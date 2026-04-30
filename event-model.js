@@ -197,9 +197,125 @@ function computeRanks(elements, edges) {
   return rank;
 }
 
+// When a read model is updated by multiple domain (or external) events, render
+// a visual stub of the read model next to each producing event so the diagram
+// avoids long fan-in arcs. The original read model is anchored to the leftmost
+// source event; each subsequent source gets a duplicate stub above it. When
+// the read model's outgoing edges all flow further right than the last source
+// (the classic fan-in shape), those outgoing edges are rerouted to come from
+// the rightmost duplicate so the downstream connection stays short. When a
+// read model participates in a cycle (e.g. `paymentSucceeded → paymentsToProcess
+// → paymentProcessor`), the outgoing edges stay on the original to preserve
+// the forward-flowing layout.
+function expandReadModelDuplicates(elements, edges, rank) {
+  const incoming = new Map();
+  for (const e of edges) {
+    if (!incoming.has(e.to)) incoming.set(e.to, []);
+    incoming.get(e.to).push(e.from);
+  }
+  const elById = new Map(elements.map((el) => [el.id, el]));
+  const newElements = [...elements];
+  const newEdges = [...edges];
+  const dupeMap = new Map();
+
+  for (const el of elements) {
+    if (el.kind !== "readModel") continue;
+    const sources = incoming.get(el.id) || [];
+    const eventSources = sources.filter((srcId) => {
+      const src = elById.get(srcId);
+      return src && (src.kind === "domainEvent" || src.kind === "externalEvent");
+    });
+    if (eventSources.length < 2) continue;
+
+    // Sort by natural column so "first" means leftmost and "last" means rightmost.
+    eventSources.sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0));
+    const firstSourceId = eventSources[0];
+    const lastSourceId = eventSources[eventSources.length - 1];
+    const lastSourceRank = rank.get(lastSourceId) ?? 0;
+
+    // First source keeps its edge to the original; the rest get duplicates.
+    const duplicates = [];
+    for (let i = 1; i < eventSources.length; i++) {
+      const sourceId = eventSources[i];
+      const dupId = `${el.id}__dup_${i}`;
+      newElements.push({
+        id: dupId,
+        kind: "readModel",
+        lane: null,
+        label: el.label,
+        fields: el.fields,
+        reads: [],
+        isDuplicate: true,
+        originalId: el.id,
+      });
+      const idx = newEdges.findIndex(
+        (e) => e.from === sourceId && e.to === el.id
+      );
+      if (idx >= 0) newEdges[idx] = { from: sourceId, to: dupId };
+      duplicates.push({ id: dupId, sourceId });
+    }
+    const lastDupId = duplicates[duplicates.length - 1].id;
+
+    // Reroute outgoing edges from the original to the last duplicate when
+    // every outgoing target sits past the last source — the fan-in pattern.
+    // Otherwise keep them on the original (cycle/back-flowing case).
+    const outgoing = newEdges.filter((e) => e.from === el.id);
+    const allDownstream =
+      outgoing.length > 0 &&
+      outgoing.every((e) => {
+        const tRank = rank.get(e.to);
+        return tRank !== undefined && tRank > lastSourceRank;
+      });
+    if (allDownstream) {
+      for (let j = 0; j < newEdges.length; j++) {
+        if (newEdges[j].from === el.id) {
+          newEdges[j] = { from: lastDupId, to: newEdges[j].to };
+        }
+      }
+    }
+
+    dupeMap.set(el.id, { originalId: el.id, firstSourceId, duplicates });
+  }
+  return { elements: newElements, edges: newEdges, dupeMap };
+}
+
+// Renumber column ranks to consecutive integers, removing any gaps left by
+// manual overrides (e.g. when a read model is shifted leftward into its first
+// source's column, the column it previously occupied becomes empty).
+function packColumns(rank) {
+  const sorted = [...new Set(rank.values())].sort((a, b) => a - b);
+  const map = new Map(sorted.map((v, i) => [v, i]));
+  for (const [k, v] of rank) rank.set(k, map.get(v));
+}
+
 function layoutEventModel(model) {
-  const { actors, aggregates, elements } = model;
-  const rank = computeRanks(elements, model.edges);
+  const { actors, aggregates } = model;
+
+  // 1. Rank the original (untouched) graph so we know each element's natural
+  //    column before any read-model rewriting.
+  const rank = computeRanks(model.elements, model.edges);
+
+  // 2. Expand fan-in read models into duplicate visual stubs. The expander
+  //    uses `rank` to decide whether to reroute the original's outgoing
+  //    edges to the rightmost duplicate.
+  const { elements, edges, dupeMap } = expandReadModelDuplicates(
+    model.elements,
+    model.edges,
+    rank
+  );
+
+  // 3. Override column assignments: anchor each fan-in original to its first
+  //    source event's column (leftmost), and assign each duplicate the
+  //    column of its source event so it sits directly above it.
+  for (const info of dupeMap.values()) {
+    rank.set(info.originalId, rank.get(info.firstSourceId));
+    for (const dup of info.duplicates) {
+      rank.set(dup.id, rank.get(dup.sourceId));
+    }
+  }
+
+  // 4. Pack columns to close gaps left by the overrides.
+  packColumns(rank);
 
   // DCB models declare events without an aggregate qualifier. When any such
   // event exists, synthesize a single "Events" lane below the time lane to
@@ -379,7 +495,7 @@ function layoutEventModel(model) {
     });
   }
 
-  return { lanes: laneRects, pos, edges: model.edges, elements, slices: sliceRects, totalW, totalH, MARGIN_L, NODE_H_BASE };
+  return { lanes: laneRects, pos, edges, elements, slices: sliceRects, totalW, totalH, MARGIN_L, NODE_H_BASE };
 }
 
 const NODE_STYLES = {
@@ -524,7 +640,9 @@ export function drawInto(svg, model, L) {
     .text((d) => d.label);
 
   // --- Edges --------------------------------------------------------------
-  const edgeData = model.edges
+  // Use the layout's edge list (expanded with duplicate-bound rewrites)
+  // rather than the raw parsed edges.
+  const edgeData = L.edges
     .map((e) => ({
       id: `${e.from}->${e.to}`,
       from: L.pos.get(e.from),
@@ -557,7 +675,9 @@ export function drawInto(svg, model, L) {
   const HEADING_H = L.NODE_H_BASE;
   const FIELD_LINE_H = 16;
 
-  const nodeData = model.elements
+  // Use the layout's element list (expanded with read-model duplicates)
+  // rather than the raw parsed elements.
+  const nodeData = L.elements
     .map((el) => ({ el, ...L.pos.get(el.id) }))
     .filter((d) => d.x != null);
 
@@ -581,10 +701,16 @@ export function drawInto(svg, model, L) {
     .attr("height", (d) => d.h)
     .attr("rx", (d) => (d.el.kind === "readModel" ? 14 : 4))
     .attr("ry", (d) => (d.el.kind === "readModel" ? 14 : 4))
-    .attr("fill", (d) => NODE_STYLES[d.el.kind].fill)
+    .attr("fill", (d) =>
+      d.el.isDuplicate && d.el.kind === "readModel"
+        ? "#bbf7d0"
+        : NODE_STYLES[d.el.kind].fill
+    )
     .attr("stroke", (d) => NODE_STYLES[d.el.kind].stroke)
     .attr("stroke-width", 1.5)
-    .attr("stroke-dasharray", (d) => NODE_STYLES[d.el.kind].dash);
+    .attr("stroke-dasharray", (d) =>
+      d.el.isDuplicate ? "2 3" : NODE_STYLES[d.el.kind].dash
+    );
 
   // UI screen-line glyph.
   nodeG
