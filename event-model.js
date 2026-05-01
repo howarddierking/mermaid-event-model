@@ -537,7 +537,7 @@ function layoutEventModel(model) {
     laneRects.push({ ...lane, y, h });
     y += h;
   }
-  const totalH = y + MARGIN_B;
+  let totalH = y + MARGIN_B;
 
   let maxCol = 0;
   for (const v of rank.values()) if (v > maxCol) maxCol = v;
@@ -611,6 +611,47 @@ function layoutEventModel(model) {
         labelH: SLICE_LABEL_H,
       });
     });
+  }
+
+  // When two slices have horizontally-overlapping label regions at the same
+  // vertical level, the labels collide. Walk slices left-to-right and shift
+  // any conflicting slice's box upward (its top edge moves up; the bottom
+  // stays anchored to its members) until its label clears all earlier ones.
+  const labelGap = 4;
+  const sortedSlices = sliceRects.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  for (let i = 0; i < sortedSlices.length; i++) {
+    const a = sortedSlices[i];
+    if (!a.label) continue;
+    let safety = 100;
+    while (safety-- > 0) {
+      let conflict = null;
+      for (let j = 0; j < i; j++) {
+        const b = sortedSlices[j];
+        if (!b.label) continue;
+        const xOverlap = !(b.x + b.w <= a.x || a.x + a.w <= b.x);
+        if (!xOverlap) continue;
+        const yOverlap = !(b.y + b.labelH <= a.y || a.y + a.labelH <= b.y);
+        if (yOverlap) { conflict = b; break; }
+      }
+      if (!conflict) break;
+      const shift = conflict.y + conflict.labelH + labelGap - a.y;
+      a.y -= shift;
+      a.h += shift;
+    }
+  }
+
+  // If the upward shifts pushed any slice's top above y=0, shift the entire
+  // diagram down so labels stay inside the viewBox.
+  let extraTop = 0;
+  for (const sr of sliceRects) {
+    if (sr.y < -extraTop) extraTop = -sr.y;
+  }
+  if (extraTop > 0) {
+    extraTop += labelGap;
+    for (const lr of laneRects) lr.y += extraTop;
+    for (const p of pos.values()) p.y += extraTop;
+    for (const sr of sliceRects) sr.y += extraTop;
+    totalH += extraTop;
   }
 
   return { lanes: laneRects, pos, edges, elements, slices: sliceRects, totalW, totalH, MARGIN_L, NODE_H_BASE };
