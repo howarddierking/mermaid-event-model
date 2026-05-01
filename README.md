@@ -222,6 +222,7 @@ Install it in any project where you're authoring Event Models:
 | --- | --- |
 | `/mermaid-event-model:event-model` | Authors or extends a DSL file from a natural-language description. Adds actors, aggregates, UIs, commands, events, read models, and automations using the project's grammar and conventions. Resolves the target file from the argument or, if absent, the most recently referenced file in the conversation. |
 | `/mermaid-event-model:add-slices` | Analyzes data flow in a DSL file and proposes vertical slice groupings. Identifies command slices (ui → command → event) and read slices (event → readModel → ui/automation), presents them for review, then applies them. |
+| `/mermaid-event-model:spec-slices` | Stamps out one markdown specification file per `slice` declared in the DSL into a sibling directory `<dsl-file>-slices/`. Each spec has a description (prose intent) and a tests section (in the future `eventModelSlice` DSL). Existing files are preserved. Intended to drive both validation and code generation downstream. |
 | `/mermaid-event-model:validate-completeness` | Checks the [information completeness principle](https://www.pradhan.is/blogs/event-modelling-best-practices) — traces every field in every UI and read model backward through events and commands to verify no data is assumed or missing. Reports gaps with suggested fixes. |
 | `/mermaid-event-model:demo-event-model` | Writes the canonical hotel-booking reference DSL to a target file (defaults to `blueprint_dsl`). Useful for seeding a new model with a working example. |
 
