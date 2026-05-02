@@ -14,24 +14,33 @@ npm install @howarddierking/mermaid-event-model d3 mermaid
 
 `d3` and `mermaid` are peer dependencies. `mermaid` is optional — you only need it if you use the Mermaid adapter (the default export); the `./core` subpath entry (for standalone SVG rendering) only requires `d3`.
 
-Register it with Mermaid like any other external diagram:
+The default export is an array of every diagram definition this package ships (`eventModel` and `sliceTests`), ready to register with Mermaid in one call:
 
 ```js
 import mermaid from 'mermaid';
-import eventModelDefinition from '@howarddierking/mermaid-event-model';
+import diagramDefinitions from '@howarddierking/mermaid-event-model';
 
-await mermaid.registerExternalDiagrams([eventModelDefinition]);
+await mermaid.registerExternalDiagrams(diagramDefinitions);
 mermaid.initialize({ startOnLoad: true });
 ```
 
-Any fenced block whose first line is `eventModel` will now be routed through this renderer.
+Any fenced block whose first line is `eventModel` or `sliceTests` will now be routed to the right renderer. To register only one of them, pull the named export:
+
+```js
+import { eventModelDefinition, sliceTestsDefinition }
+  from '@howarddierking/mermaid-event-model';
+
+await mermaid.registerExternalDiagrams([eventModelDefinition]); // event-model only
+```
 
 For standalone use without Mermaid:
 
 ```js
 import { renderEventModel } from '@howarddierking/mermaid-event-model/core';
+import { renderSliceTests } from '@howarddierking/mermaid-event-model/slice-tests-core';
 
 renderEventModel(dslSource, document.getElementById('diagram'));
+renderSliceTests(testSource, document.getElementById('tests'));
 ```
 
 ### Via CDN (no build step)
@@ -44,15 +53,15 @@ The package is mirrored on jsDelivr. Pair it with an importmap so the bare `d3` 
   "imports": {
     "d3": "https://cdn.jsdelivr.net/npm/d3@7/+esm",
     "mermaid": "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs",
-    "@howarddierking/mermaid-event-model": "https://cdn.jsdelivr.net/npm/@howarddierking/mermaid-event-model/event-model-mermaid.js"
+    "@howarddierking/mermaid-event-model": "https://cdn.jsdelivr.net/npm/@howarddierking/mermaid-event-model/index.js"
   }
 }
 </script>
 <script type="module">
   import mermaid from 'mermaid';
-  import eventModelDefinition from '@howarddierking/mermaid-event-model';
+  import diagramDefinitions from '@howarddierking/mermaid-event-model';
 
-  await mermaid.registerExternalDiagrams([eventModelDefinition]);
+  await mermaid.registerExternalDiagrams(diagramDefinitions);
   mermaid.initialize({ startOnLoad: true });
 </script>
 ```

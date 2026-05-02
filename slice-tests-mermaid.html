@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Event Model – Mermaid integration demo</title>
+<title>Slice Tests – Mermaid integration demo</title>
 <style>
   body { font-family: system-ui, sans-serif; margin: 20px; max-width: 1600px; }
   h1 { margin-top: 0; }
@@ -11,7 +11,7 @@
     border: 1px solid #ddd;
     padding: 10px;
     background: #fafafa;
-    overflow: auto;     /* wide event models scroll horizontally */
+    overflow: auto;
     margin: 12px 0;
   }
   .mermaid svg { display: block; }
@@ -20,32 +20,32 @@
 {
   "imports": {
     "d3": "https://cdn.jsdelivr.net/npm/d3@7/+esm",
-    "mermaid": "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs",
-    "@howarddierking/mermaid-event-model": "https://cdn.jsdelivr.net/npm/@howarddierking/mermaid-event-model/event-model-mermaid.js"
+    "mermaid": "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
   }
 }
 </script>
 </head>
 <body>
-<h1>Event Model as a Mermaid chart type</h1>
+<h1>Slice Tests as a Mermaid chart type</h1>
 <p>
-  This page registers the Event Model diagram as an external Mermaid diagram, then renders
-  a fenced <code>&lt;pre class="mermaid"&gt;</code> block whose body starts with <code>eventModel</code>.
-  The renderer is loaded from the
-  <code>@howarddierking/mermaid-event-model</code> package via jsDelivr — no build step required.
+  This page registers the Slice Tests diagram as an external Mermaid diagram, then renders
+  a fenced <code>&lt;pre class="mermaid"&gt;</code> block whose body starts with <code>sliceTests</code>.
+  Mermaid routes it to the adapter (<code>slice-tests-mermaid.js</code>) which draws the
+  Given / When / Then test patterns using the same shared d3 drawing module as the standalone
+  renderer.
 </p>
 
-<p>The source is loaded from <code>blueprint_dsl</code>; edit that file and the diagram will auto-refresh.</p>
+<p>The source is loaded from <code>blueprint_sliceTests</code>; edit that file and the diagram will auto-refresh.</p>
 
 <h2>Rendered diagram</h2>
-<pre class="mermaid" id="diagram-block">eventModel</pre>
+<pre class="mermaid" id="diagram-block">sliceTests</pre>
 
 <script type="module">
   import mermaid from 'mermaid';
-  import diagramDefinitions from '@howarddierking/mermaid-event-model';
+  import diagramDefinitions from './index.js';
 
   const params = new URLSearchParams(location.search);
-  const DSL_URL = './' + (params.get('dsl') || 'blueprint_dsl');
+  const DSL_URL = './' + (params.get('dsl') || 'blueprint_sliceTests');
   const POLL_MS = 1000;
 
   const container = document.getElementById('diagram-block');

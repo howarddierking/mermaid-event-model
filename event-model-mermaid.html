@@ -41,7 +41,7 @@
 
 <script type="module">
   import mermaid from 'mermaid';
-  import eventModelDefinition from './event-model-mermaid.js';
+  import diagramDefinitions from './index.js';
 
   const params = new URLSearchParams(location.search);
   const DSL_URL = './' + (params.get('dsl') || 'blueprint_dsl');
@@ -50,7 +50,7 @@
   const container = document.getElementById('diagram-block');
   let lastSrc = null;
 
-  await mermaid.registerExternalDiagrams([eventModelDefinition]);
+  await mermaid.registerExternalDiagrams(diagramDefinitions);
   mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
 
   async function fetchDsl() {

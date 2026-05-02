@@ -3,14 +3,20 @@
   "version": "0.1.9",
   "description": "Event Modeling DSL and SVG renderer as a Mermaid external diagram. Draws a strict horizontal timeline with actor/aggregate swimlanes, collapsible data sections, and vertical-slice bounding boxes.",
   "type": "module",
-  "main": "./event-model-mermaid.js",
+  "main": "./index.js",
   "exports": {
-    ".": "./event-model-mermaid.js",
-    "./core": "./event-model.js"
+    ".": "./index.js",
+    "./core": "./event-model.js",
+    "./event-model": "./event-model-mermaid.js",
+    "./slice-tests": "./slice-tests-mermaid.js",
+    "./slice-tests-core": "./slice-tests.js"
   },
   "files": [
+    "index.js",
     "event-model.js",
     "event-model-mermaid.js",
+    "slice-tests.js",
+    "slice-tests-mermaid.js",
     "settings.png",
     "README.md",
     "LICENSE"
