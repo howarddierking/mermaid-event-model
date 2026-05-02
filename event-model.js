@@ -30,7 +30,25 @@ const AUTOMATION_NODE_H = AUTOMATION_LABEL_H + AUTOMATION_IMG_H;
 // (column, lane) so elements in the same causal step line up vertically
 // across all lanes — the defining property of an Event Model.
 
+// If `src` is a markdown document containing the DSL inside a fenced code
+// block, return just the block's body. Otherwise return src unchanged. This
+// lets every caller (the renderer, the Mermaid adapter, downstream tooling)
+// accept either a raw DSL string or a `.md` file's text without branching.
+function extractFromMarkdown(src, keyword) {
+  const firstNonEmpty = src.split(/\r?\n/).find((l) => l.trim().length > 0);
+  if (firstNonEmpty && new RegExp(`^${keyword}\\b`).test(firstNonEmpty.trim())) {
+    return src;
+  }
+  const re = /```(?:[\w-]+)?[\t ]*\r?\n([\s\S]*?)```/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    if (new RegExp(`^\\s*${keyword}\\b`).test(m[1])) return m[1];
+  }
+  return src;
+}
+
 function parseEventModel(src) {
+  src = extractFromMarkdown(src, "eventModel");
   // The `:<lane>` qualifier on domainEvent is optional in DCB models (no aggregates).
   // The optional `reads [a, b, c]` clause on commands lists past event types the
   // command must consult for consistency — a directive to the event-sourcing

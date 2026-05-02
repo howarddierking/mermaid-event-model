@@ -1,3 +1,10 @@
+# {{MODEL_NAME}}
+
+The canonical hotel-booking event model. Demonstrates every DSL feature: actors, aggregates, UIs, commands, events (including externalEvents), read models, automations, data sections, and slices.
+
+## Model
+
+```mermaid
 eventModel
 	actor Manager
 	actor Guest
@@ -265,3 +272,4 @@ eventModel
 		paymentSucceeded-->salesReport
 		salesReport-->sales_ui
 	
+```

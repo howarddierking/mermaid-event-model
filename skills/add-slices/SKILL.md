@@ -12,7 +12,9 @@ You are analyzing an Event Model DSL file and adding `slice` declarations that g
 
 Read the DSL file at: `$ARGUMENTS`
 
-If no argument is provided, default to `blueprint_dsl` in the project root.
+If no argument is provided, default to `blueprint_dsl.md` in the project root.
+
+**DSL files are markdown.** Each one is a `.md` file whose DSL lives inside a fenced ```mermaid block whose first content line is `eventModel`. When you parse the file for slices, look at the lines INSIDE that fence. When you write `slice` declarations back into the file, insert them INSIDE the same fence — preserving the existing tab indentation. Don't add any markdown content outside the fence and don't move the fence boundaries.
 
 ## Background: What is a slice?
 

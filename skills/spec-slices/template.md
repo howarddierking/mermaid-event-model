@@ -2,6 +2,13 @@
 
 <!-- slice id: {{SLICE_ID}} -->
 
+## Model
+
+```mermaid
+eventModel
+{{SLICE_MODEL_BODY}}
+```
+
 ## Description
 
 _Describe the high-level intent of this slice in prose. What user-visible capability does it represent? Why does it matter? When does it run, and what constraint or invariant does it preserve?_

@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Event Model Viewer</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, sans-serif; color: #0f172a; }
+  .layout { display: flex; height: 100vh; }
+
+  .sidebar {
+    width: 280px;
+    padding: 16px;
+    border-right: 1px solid #e5e7eb;
+    background: #fafafa;
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .sidebar h2 {
+    margin: 16px 0 4px;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #6b7280;
+  }
+  .sidebar h2:first-of-type { margin-top: 0; }
+  .sidebar .model-name {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    color: #374151;
+    margin-bottom: 12px;
+    word-break: break-all;
+  }
+  .sidebar a {
+    display: block;
+    padding: 6px 10px;
+    border-radius: 4px;
+    color: #1f2937;
+    text-decoration: none;
+    font-size: 13px;
+    margin-bottom: 1px;
+  }
+  .sidebar a:hover { background: #eef2f7; }
+  .sidebar a.active { background: #dbeafe; color: #1e3a8a; font-weight: 600; }
+
+  .content {
+    flex: 1;
+    padding: 28px 36px;
+    overflow-y: auto;
+    line-height: 1.55;
+  }
+  .content h1 { margin-top: 0; font-size: 26px; }
+  .content h2 { margin-top: 28px; font-size: 18px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+  .content p, .content li { font-size: 14px; }
+  .content em { color: #6b7280; }
+  .content code { font-family: ui-monospace, monospace; font-size: 13px; }
+  .content pre { background: #f3f4f6; padding: 10px 12px; border-radius: 4px; overflow-x: auto; }
+  .content pre code { background: transparent; padding: 0; }
+  .content pre.mermaid {
+    background: #fafafa;
+    border: 1px solid #e5e7eb;
+    padding: 14px;
+    overflow: auto;
+  }
+  .content pre.mermaid svg { display: block; }
+
+  .empty { color: #6b7280; font-style: italic; margin-top: 40px; text-align: center; }
+  .error {
+    color: #991b1b;
+    background: #fee2e2;
+    border: 1px solid #fca5a5;
+    padding: 12px;
+    border-radius: 4px;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "d3": "https://cdn.jsdelivr.net/npm/d3@7/+esm",
+    "mermaid": "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs",
+    "marked": "https://cdn.jsdelivr.net/npm/marked@15/+esm",
+    "@howarddierking/mermaid-event-model": "https://cdn.jsdelivr.net/npm/@howarddierking/mermaid-event-model/index.js"
+  }
+}
+</script>
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar">
+    <h2>Model</h2>
+    <div class="model-name" id="model-name"></div>
+    <div id="model-link"></div>
+    <h2>Slices</h2>
+    <div id="slice-list"></div>
+  </nav>
+  <main class="content" id="content">
+    <div class="empty">Loading…</div>
+  </main>
+</div>
+
+<script type="module">
+import mermaid from 'mermaid';
+import { marked } from 'marked';
+import diagramDefinitions from '@howarddierking/mermaid-event-model';
+
+await mermaid.registerExternalDiagrams(diagramDefinitions);
+mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
+
+// `model` is the base name; the conventions are:
+//   <model>.md          → the model file (markdown wrapping the eventModel DSL)
+//   <model>-slices/     → directory of per-slice spec files (optional)
+const params = new URLSearchParams(location.search);
+const MODEL = params.get('model') || '{{MODEL_NAME}}';
+const MODEL_FILE = MODEL + '.md';
+const SLICES_DIR = MODEL + '-slices';
+const POLL_MS = 1500;
+
+document.getElementById('model-name').textContent = MODEL;
+
+const modelLinkEl = document.getElementById('model-link');
+const sliceListEl = document.getElementById('slice-list');
+const content = document.getElementById('content');
+
+let activeFile = params.get('file') || '__model';
+let lastSrc = null;
+
+async function listSliceFiles() {
+  try {
+    const res = await fetch('./' + SLICES_DIR + '/', { cache: 'no-store' });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const matches = [...html.matchAll(/href="([^"]+\.md)"/g)];
+    return [...new Set(matches.map((m) => decodeURIComponent(m[1])))].sort();
+  } catch (_) {
+    return [];
+  }
+}
+
+async function loadActive() {
+  const url = activeFile === '__model'
+    ? './' + encodeURIComponent(MODEL_FILE)
+    : './' + SLICES_DIR + '/' + encodeURIComponent(activeFile);
+  const res = await fetch(url + '?t=' + Date.now(), { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Could not load ${url}: ${res.status}`);
+  return await res.text();
+}
+
+function makeLink(label, fileKey, urlValue) {
+  const a = document.createElement('a');
+  a.href = '?model=' + encodeURIComponent(MODEL) + '&file=' + encodeURIComponent(urlValue);
+  a.textContent = label;
+  if (fileKey === activeFile) a.classList.add('active');
+  a.dataset.fileKey = fileKey;
+  a.addEventListener('click', (e) => {
+    e.preventDefault();
+    activeFile = fileKey;
+    history.replaceState(null, '', a.href);
+    document.querySelectorAll('.sidebar a').forEach((x) => x.classList.remove('active'));
+    a.classList.add('active');
+    lastSrc = null;
+    loadAndRender();
+  });
+  return a;
+}
+
+function renderSidebar(sliceFiles) {
+  modelLinkEl.innerHTML = '';
+  modelLinkEl.appendChild(makeLink(MODEL, '__model', '__model'));
+
+  sliceListEl.innerHTML = '';
+  if (sliceFiles.length === 0) {
+    const note = document.createElement('div');
+    note.style.cssText = 'color:#9ca3af;font-size:12px;padding:6px 10px;';
+    note.textContent = '(no slice specs found)';
+    sliceListEl.appendChild(note);
+    return;
+  }
+  for (const f of sliceFiles) {
+    const label = f.replace(/\.md$/, '');
+    sliceListEl.appendChild(makeLink(label, f, f));
+  }
+}
+
+async function loadAndRender() {
+  let src;
+  try {
+    src = await loadActive();
+  } catch (err) {
+    content.innerHTML = '<div class="error">' + (err.stack || err) + '</div>';
+    return;
+  }
+  if (src === lastSrc) return;
+  lastSrc = src;
+
+  content.innerHTML = marked.parse(src);
+
+  content.querySelectorAll('pre code.language-mermaid').forEach((code) => {
+    const pre = code.parentElement;
+    const newPre = document.createElement('pre');
+    newPre.className = 'mermaid';
+    newPre.textContent = code.textContent;
+    pre.replaceWith(newPre);
+  });
+
+  const nodes = [...content.querySelectorAll('pre.mermaid')];
+  if (nodes.length > 0) {
+    try {
+      await mermaid.run({ nodes });
+    } catch (err) {
+      console.error('mermaid render error', err);
+    }
+  }
+}
+
+try {
+  const sliceFiles = await listSliceFiles();
+  renderSidebar(sliceFiles);
+  await loadAndRender();
+} catch (err) {
+  content.innerHTML = '<div class="error">' + (err.stack || err) + '</div>';
+}
+
+setInterval(loadAndRender, POLL_MS);
+</script>
+</body>
+</html>

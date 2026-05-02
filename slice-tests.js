@@ -22,7 +22,23 @@ import * as d3 from "d3";
 // event-model DSL exactly (domainEvent, externalEvent, command, readModel,
 // automation, ui) and inherit the same colors and shapes.
 
+// If `src` is a markdown document containing the DSL inside a fenced code
+// block, return just the block's body. Otherwise return src unchanged.
+function extractFromMarkdown(src, keyword) {
+  const firstNonEmpty = src.split(/\r?\n/).find((l) => l.trim().length > 0);
+  if (firstNonEmpty && new RegExp(`^${keyword}\\b`).test(firstNonEmpty.trim())) {
+    return src;
+  }
+  const re = /```(?:[\w-]+)?[\t ]*\r?\n([\s\S]*?)```/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    if (new RegExp(`^\\s*${keyword}\\b`).test(m[1])) return m[1];
+  }
+  return src;
+}
+
 function parseSliceTests(src) {
+  src = extractFromMarkdown(src, "sliceTests");
   const itemRe =
     /^(domainEvent|externalEvent|command|readModel|automation|ui)\s*\["([^"]*)"\]\s*$/;
   const testRe = /^test\s*\["([^"]*)"\]\s*$/;

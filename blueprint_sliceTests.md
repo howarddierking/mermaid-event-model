@@ -1,3 +1,10 @@
+# blueprint_sliceTests
+
+Reference set of slice-test patterns matching Adam Dymitruk's four canonical Event Modeling test types: state change, state view, external state input, and external state output.
+
+## Model
+
+```mermaid
 sliceTests
 	test["State Change"]
 		given
@@ -35,3 +42,4 @@ sliceTests
 		then
 			domainEvent["Notification Sent"]
 			domainEvent["Notification Failed"]
+```

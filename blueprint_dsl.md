@@ -1,3 +1,10 @@
+# blueprint_dsl
+
+The canonical aggregate-based hotel-booking event model. Demonstrates every DSL feature: actors, aggregates, UIs, commands, events (including externalEvents), read models, automations, data sections, and slices — including a fan-in (`paymentsToProcess` updated by both `paymentRequested` and `paymentSucceeded`) and a feedback cycle (`paymentSucceeded → paymentsToProcess → paymentProcessor → ...`).
+
+## Model
+
+```mermaid
 eventModel
 	actor Manager
 	actor Guest
@@ -265,3 +272,4 @@ eventModel
 		paymentSucceeded-->salesReport
 		salesReport-->sales_ui
 	
+```

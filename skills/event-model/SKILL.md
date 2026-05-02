@@ -18,12 +18,16 @@ The argument `$ARGUMENTS` is freeform — typically a description of what to add
 
 ### Resolving the target file
 
-1. If `$ARGUMENTS` contains an explicit file path (anything matching a DSL filename in this project, e.g. `blueprint_dsl`, `blueprint_dsl_dcb`, `blueprint_dsl_fanin`, or a `.dsl` path), use that.
+DSL files in this project are markdown — each one is a `.md` file whose DSL lives inside a fenced ```mermaid block whose first content line is `eventModel`. Filenames typically end in `.md`; legacy `blueprint_dsl` (no extension) is no longer used.
+
+1. If `$ARGUMENTS` contains an explicit file path (e.g. `blueprint_dsl.md`, `blueprint_dsl_dcb.md`, `blueprint_dsl_fanin.md`, or any `.md` path), use that.
 2. Otherwise, scan the **current conversation context** for the most recently referenced DSL file. Preference order: a file the user explicitly named in their last message, a file you most recently read or wrote, then any file the renderer demos pointed at.
 3. If still ambiguous, ask the user once which file before proceeding.
-4. As an absolute fallback, use `blueprint_dsl` in the project root.
+4. As an absolute fallback, use `blueprint_dsl.md` in the project root.
 
-If the target file does not exist yet, create it with the `eventModel` header and any actors/aggregates the description implies.
+If the target file does not exist yet, create it as a markdown file: a `# <title>` heading, a one-line description, then a `## Model` section containing a fenced ```mermaid block that opens with the `eventModel` keyword. All actors/aggregates/elements/edges go inside that fence, tab-indented under `eventModel`.
+
+When extending an existing file, edit lines INSIDE the fenced block — preserve the markdown structure around the fence and don't move the fence boundaries.
 
 ## DSL grammar (cheat sheet)
 
@@ -93,5 +97,5 @@ Read whichever of these matches the pattern the user is describing — they are 
 
 - Generate `slice` declarations (use `/mermaid-event-model:add-slices`).
 - Validate field traceability (use `/mermaid-event-model:validate-completeness`).
-- Reset a file to the canonical demo (use `/mermaid-event-model:demo-event-model`).
+- Seed a project from scratch or reset a file to the canonical reference (use `/mermaid-event-model:create-event-model`).
 - Modify files outside the target DSL file (no renderer or skill changes).

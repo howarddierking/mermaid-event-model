@@ -1,3 +1,10 @@
+# blueprint_dsl_dcb
+
+The same hotel-booking model rewritten in Dynamic Consistency Boundary style: no aggregates, with `reads [...]` clauses on commands declaring the past event types they replay for consistency. Domain events without a `:<Aggregate>` qualifier land in a synthesized `Events` lane below `Time`.
+
+## Model
+
+```mermaid
 eventModel
 	actor Manager
 	actor Guest
@@ -225,3 +232,4 @@ eventModel
 	}
 	paymentSucceeded-->salesReport
 	salesReport-->sales_ui
+```

@@ -68,31 +68,31 @@ The package is mirrored on jsDelivr. Pair it with an importmap so the bare `d3` 
 
 ## Running the examples
 
-There are two demo pages, both served as static HTML with no build step (mermaid and d3 are loaded from a CDN at runtime):
+Two demo pages, served as static HTML with no build step (mermaid, d3, and marked are loaded from a CDN at runtime):
 
 | Page | What it shows |
 | --- | --- |
-| `event-model-mermaid.html` | **Recommended.** Registers Event Model as a [Mermaid external diagram](https://mermaid.js.org/config/usage.html#external-diagrams) and renders a `<pre class="mermaid">eventModel …</pre>` block — the same way you'd embed it inside a Markdown/Docusaurus/MkDocs site that already uses mermaid. |
-| `event-model.html` | Standalone demo with a DSL textarea and a Render button, no mermaid dependency. Useful for iterating on the DSL. |
+| `model-viewer.html` | **Canonical demo.** Renders a `.md` model file (markdown prose + the embedded `eventModel` diagram), with a sidebar that lists every slice spec under the matching `<model>-slices/` directory. Switch models with `?model=<basename>`. |
+| `core-playground.html` | Standalone DSL textarea + Render button, exercising the core renderer directly without Mermaid. Useful for diagnosing whether a layout bug is in the renderer or in the Mermaid integration. |
 
-Start a local server and open the mermaid demo:
+Start a local server and open the viewer:
 
 ```sh
 # from the repo root
 python3 -m http.server 8000
 ```
 
-Then open <http://localhost:8000/event-model-mermaid.html>.
+Then open <http://localhost:8000/model-viewer.html>.
 
-A local HTTP server is required because the JS files are ES modules and most browsers block module imports over `file://`.
+A local HTTP server is required because the JS files are ES modules and most browsers block module imports over `file://`. The Python server's directory listing is also what powers the slice-spec sidebar.
 
-The mermaid demo loads `blueprint_dsl` via `fetch` and polls for changes every second — edit the file and the diagram updates automatically without a manual reload. Override the source with a `?dsl=<filename>` query param (e.g. `event-model-mermaid.html?dsl=blueprint_dsl_dcb` to view the DCB variant).
+The viewer loads `blueprint_dsl_fanin.md` by default and polls for changes every 1.5s — edit any `.md` and the open page re-renders. Try other models with `?model=blueprint_dsl`, `?model=blueprint_dsl_dcb`, or `?model=blueprint_sliceTests`.
 
 The rendered diagram scrolls horizontally — each element gets its own column, so wide models overflow the right edge rather than compressing.
 
 ## The DSL
 
-See [`blueprint_dsl`](blueprint_dsl) for a full aggregate-based example (a hotel booking system) and [`blueprint_dsl_dcb`](blueprint_dsl_dcb) for the same model rewritten in DCB style (no aggregates, with `reads` clauses on commands). The grammar:
+DSL files are markdown — each one is a `.md` file whose DSL lives inside a fenced ```mermaid block. See [`blueprint_dsl.md`](blueprint_dsl.md) for a full aggregate-based example (a hotel booking system) and [`blueprint_dsl_dcb.md`](blueprint_dsl_dcb.md) for the same model rewritten in DCB style (no aggregates, with `reads` clauses on commands). The renderer's parser tolerates either raw DSL or markdown wrappers, so anywhere this README shows raw `eventModel ...` syntax, that's the body of the fenced block. The grammar:
 
 ```
 eventModel
@@ -233,9 +233,9 @@ Install it in any project where you're authoring Event Models:
 | `/mermaid-event-model:add-slices` | Analyzes data flow in a DSL file and proposes vertical slice groupings. Identifies command slices (ui → command → event) and read slices (event → readModel → ui/automation), presents them for review, then applies them. |
 | `/mermaid-event-model:spec-slices` | Stamps out one markdown specification file per `slice` declared in the DSL into a sibling directory `<dsl-file>-slices/`. Each spec has a description (prose intent) and a tests section (in the future `eventModelSlice` DSL). Existing files are preserved. Intended to drive both validation and code generation downstream. |
 | `/mermaid-event-model:validate-completeness` | Checks the [information completeness principle](https://www.pradhan.is/blogs/event-modelling-best-practices) — traces every field in every UI and read model backward through events and commands to verify no data is assumed or missing. Reports gaps with suggested fixes. |
-| `/mermaid-event-model:demo-event-model` | Writes the canonical hotel-booking reference DSL to a target file (defaults to `blueprint_dsl`). Useful for seeding a new model with a working example. |
+| `/mermaid-event-model:create-event-model` | Seeds a project with a working Event Model: writes a markdown file (DSL inside a fenced `mermaid` block, defaults to `blueprint_dsl.md`) plus a sibling `model-viewer.html` page that renders it and lists any companion slice specs. Useful for bootstrapping a new model or resetting to the reference example. |
 
-Each skill accepts an optional target path; they default to `blueprint_dsl`.
+Each skill accepts an optional target path; they default to `blueprint_dsl.md`.
 
 ### Local plugin development
 
@@ -243,12 +243,18 @@ The plugin skills live at [`skills/`](skills/) and the manifest at [`.claude-plu
 
 ## Files
 
-- `event-model-mermaid.html` — demo using Mermaid's external-diagram API (recommended).
-- `event-model-mermaid.js` — adapter that registers the DSL as a Mermaid diagram type.
-- `event-model.html` — standalone demo with a DSL textarea and Render button.
-- `event-model.js` — core ES module with `parseEventModel`, `computeRanks`, `layoutEventModel`, `drawInto`, and `renderEventModel`. Takes `d3` as a peer dependency.
-- `blueprint_dsl` — reference DSL source (aggregate-based).
-- `blueprint_dsl_dcb` — same model rewritten in DCB style: no aggregates, with `reads [...]` clauses on commands.
+- `model-viewer.html` — canonical demo: renders a model `.md` plus the linked `<model>-slices/` directory, with sidebar navigation.
+- `core-playground.html` — DSL textarea + Render button exercising the core renderer directly (no Mermaid).
+- `index.js` — combined Mermaid registration entry: default export is the array of every diagram definition this package ships.
+- `event-model.js` — core ES module: `parseEventModel`, `computeRanks`, `layoutEventModel`, `drawInto`, `renderEventModel`. Takes `d3` as a peer dependency.
+- `event-model-mermaid.js` — Mermaid adapter that registers `eventModel` as an external diagram type.
+- `slice-tests.js` — core ES module for the Slice Tests diagram: `parseSliceTests`, `layoutSliceTests`, `drawInto`, `renderSliceTests`.
+- `slice-tests-mermaid.js` — Mermaid adapter that registers `sliceTests` as an external diagram type.
+- `blueprint_dsl.md` — reference DSL (aggregate-based), DSL embedded in a `mermaid` fenced block.
+- `blueprint_dsl_dcb.md` — same model rewritten in DCB style: no aggregates, with `reads [...]` clauses on commands.
+- `blueprint_dsl_fanin.md` — fan-in stress test: 16 events updating one read model.
+- `blueprint_sliceTests.md` — Slice Tests reference DSL (Given / When / Then patterns).
+- `<model>-slices/` — per-model directories of slice spec markdown files, written by the `spec-slices` skill.
 - `skills/` — Claude Code skills for DSL authoring (auto-slicing, completeness validation, demo generator).
 - `.claude-plugin/plugin.json` — Manifest that makes this repo installable as a Claude Code plugin.
 - `.claude/skills/` — symlink to `skills/` so the same skills also work as local project-scoped commands while developing in this repo.

@@ -14,7 +14,9 @@ Reference: https://www.pradhan.is/blogs/event-modelling-best-practices
 
 Read the DSL file at: `$ARGUMENTS`
 
-If no argument is provided, default to `blueprint_dsl` in the project root.
+If no argument is provided, default to `blueprint_dsl.md` in the project root.
+
+**DSL files are markdown.** Each one is a `.md` file whose DSL lives inside a fenced ```mermaid block whose first content line is `eventModel`. When analyzing for completeness, focus on the lines INSIDE that fence — they hold the element declarations, data sections, and edges. The markdown structure outside the fence is descriptive prose and doesn't affect traceability.
 
 ## The Information Completeness Principle
 

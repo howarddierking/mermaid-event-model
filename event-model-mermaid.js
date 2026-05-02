@@ -66,11 +66,13 @@ const styles = () => `
   .em-diagram .edge { stroke-width: 1.25; }
 `;
 
-// Mermaid's detector is called on the raw diagram source. Match any text
-// whose first non-empty line is "eventModel".
+// Mermaid's detector is called on the raw diagram source. Match either raw
+// DSL (first non-empty line is `eventModel`) or a markdown wrapper containing
+// the DSL inside a fenced block whose first content line is `eventModel`.
 function detector(text) {
   const firstLine = (text || "").trim().split(/\r?\n/)[0] || "";
-  return /^eventModel\b/.test(firstLine);
+  if (/^eventModel\b/.test(firstLine)) return true;
+  return /```(?:[\w-]+)?\s*\n\s*eventModel\b/.test(text || "");
 }
 
 function cssEscape(id) {

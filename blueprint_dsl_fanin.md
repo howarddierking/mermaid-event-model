@@ -1,3 +1,10 @@
+# blueprint_dsl_fanin
+
+The complete event model. The 33 slices defined here are listed in the sidebar — each one has its own specification with a focused view of just that slice's elements, plus description and tests sections.
+
+## Model
+
+```mermaid
 eventModel
 	actor Customer
 	actor Admin
@@ -266,3 +273,4 @@ eventModel
 	}
 	slice view_activity_feed["View Activity Feed"]
 		activityFeed-->activity_ui
+```

@@ -2,6 +2,28 @@
 
 <!-- slice id: feed_signup -->
 
+## Model
+
+```mermaid
+eventModel
+	aggregate Auth
+	domainEvent:Auth signedUp["Signed Up"] {
+		customerId: UUID
+		email: string
+		signedUpAt: timestamp
+	}
+	readModel activityFeed["Customer Activity Timeline"] {
+		customerId: UUID
+		eventType: string
+		summary: string
+		occurredAt: timestamp
+		severity: string
+		linkedEntityId: UUID
+	}
+	slice feed_signup["Feed: Signed Up"]
+		signedUp-->activityFeed
+```
+
 ## Description
 
 _Describe the high-level intent of this slice in prose. What user-visible capability does it represent? Why does it matter? When does it run, and what constraint or invariant does it preserve?_

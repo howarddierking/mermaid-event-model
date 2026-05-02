@@ -60,7 +60,8 @@ const styles = () => `
 
 function detector(text) {
   const firstLine = (text || "").trim().split(/\r?\n/)[0] || "";
-  return /^sliceTests\b/.test(firstLine);
+  if (/^sliceTests\b/.test(firstLine)) return true;
+  return /```(?:[\w-]+)?\s*\n\s*sliceTests\b/.test(text || "");
 }
 
 function cssEscape(id) {
