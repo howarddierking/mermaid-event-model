@@ -7,6 +7,10 @@ import * as d3 from "d3";
 //       test["<Title>"]
 //           given
 //               domainEvent["<Label>"]
+//               domainEvent["<Label>"] {
+//                   field1: type
+//                   field2: type
+//               }
 //               readModel["<Label>"]
 //               ...
 //           when                       (optional — omit for state-view tests)
@@ -16,11 +20,13 @@ import * as d3 from "d3";
 //               ...
 //
 // Each test renders as a self-contained card with its own Given / When / Then
-// row labels on the left and items stacked horizontally to the right. Tests
-// grid-pack into rows that fill the target width (read from the container's
-// clientWidth at render time, defaulting to 1200). Item kinds match the
-// event-model DSL exactly (domainEvent, externalEvent, command, readModel,
-// automation, ui) and inherit the same colors and shapes.
+// row labels on the left and items stacked horizontally to the right. Items
+// can carry an optional brace-delimited data section listing typed fields,
+// using the same syntax as the eventModel chart type. Tests grid-pack into
+// rows that fill the target width (read from the container's clientWidth at
+// render time, defaulting to 1200). Item kinds match the event-model DSL
+// exactly (domainEvent, externalEvent, command, readModel, automation, ui)
+// and inherit the same colors and shapes.
 
 // If `src` is a markdown document containing the DSL inside a fenced code
 // block, return just the block's body. Otherwise return src unchanged.
@@ -40,7 +46,8 @@ function extractFromMarkdown(src, keyword) {
 function parseSliceTests(src) {
   src = extractFromMarkdown(src, "sliceTests");
   const itemRe =
-    /^(domainEvent|externalEvent|command|readModel|automation|ui)\s*\["([^"]*)"\]\s*$/;
+    /^(domainEvent|externalEvent|command|readModel|automation|ui)\s*\["([^"]*)"\]\s*(\{)?\s*$/;
+  const fieldRe = /^(\w+)\s*:\s*(\w+)$/;
   const testRe = /^test\s*\["([^"]*)"\]\s*$/;
   const lines = src.split(/\r?\n/);
   const indentOf = (raw) => raw.match(/^[\t ]*/)[0].length;
@@ -70,8 +77,19 @@ function parseSliceTests(src) {
         }
         const im = l.match(itemRe);
         if (im && section) {
-          test[section].push({ kind: im[1], label: im[2] });
+          const [, kind, label, openBrace] = im;
+          const fields = [];
           i++;
+          if (openBrace) {
+            while (i < lines.length) {
+              const fl = lines[i].trim();
+              i++;
+              if (fl === "}") break;
+              const fm = fl.match(fieldRe);
+              if (fm) fields.push({ name: fm[1], type: fm[2] });
+            }
+          }
+          test[section].push({ kind, label, fields });
           continue;
         }
         // Unknown line inside a test — skip without breaking out.
@@ -89,7 +107,8 @@ function layoutSliceTests(model, options = {}) {
   const TARGET_W      = Math.max(360, options.targetWidth || 1200);
 
   const ITEM_W_MIN    = 110;
-  const ITEM_H        = 56;
+  const ITEM_H_BASE   = 56;
+  const FIELD_LINE_H  = 16;
   const ITEM_GAP      = 10;
   const ROW_LABEL_W   = 64;
   const TEST_TITLE_H  = 32;
@@ -98,24 +117,59 @@ function layoutSliceTests(model, options = {}) {
   const TEST_GAP      = 24;
   const MARGIN        = 20;
   const LABEL_CHAR_W  = 7;
+  const FIELD_CHAR_W  = 6;
+  const FIELD_PAD     = 20;
+
+  // Per-item height: heading section (ITEM_H_BASE) plus an optional fields
+  // section sized to the number of typed fields, mirroring event-model.
+  const itemHOf = (it) => {
+    if (!it.fields || it.fields.length === 0) return ITEM_H_BASE;
+    return ITEM_H_BASE + it.fields.length * FIELD_LINE_H + 4;
+  };
 
   // Per test, compute its OWN size based on its content. Each test card is
   // sized to fit just what it contains — no uniform sizing across tests.
   const tests = model.tests.map((t) => {
     const allItems = [...t.given, ...t.when, ...t.then];
+
+    // Item width = max(label width, widest field "name: type")
     let itemW = ITEM_W_MIN;
     for (const it of allItems) {
       const lines = wrapLabel(it.label, 14);
       const longest = Math.max(...lines.map((s) => s.length), 0);
       const w = longest * LABEL_CHAR_W + 24;
       if (w > itemW) itemW = w;
+      if (it.fields && it.fields.length > 0) {
+        for (const f of it.fields) {
+          const fw = (f.name.length + 2 + f.type.length) * FIELD_CHAR_W + FIELD_PAD;
+          if (fw > itemW) itemW = fw;
+        }
+      }
     }
+
+    // Per-row height = max item height in that row (plus padding).
+    const rowItemMaxH = (items) =>
+      items.length === 0
+        ? ITEM_H_BASE
+        : Math.max(...items.map(itemHOf));
+    const givenRowH = rowItemMaxH(t.given) + ROW_PAD * 2;
+    const whenRowH  = rowItemMaxH(t.when)  + ROW_PAD * 2;
+    const thenRowH  = rowItemMaxH(t.then)  + ROW_PAD * 2;
+
     const maxItems = Math.max(t.given.length, t.when.length, t.then.length, 1);
     const cellW = maxItems * itemW + (maxItems - 1) * ITEM_GAP;
     const w = TEST_PAD * 2 + ROW_LABEL_W + cellW;
-    const rowH = ITEM_H + ROW_PAD * 2;
-    const h = TEST_PAD * 2 + TEST_TITLE_H + 3 * rowH;
-    return { ...t, itemW, maxItems, cellW, w, h, rowH };
+    const h = TEST_PAD * 2 + TEST_TITLE_H + givenRowH + whenRowH + thenRowH;
+
+    return {
+      ...t,
+      itemW,
+      maxItems,
+      cellW,
+      w,
+      h,
+      rowHs: { given: givenRowH, when: whenRowH, then: thenRowH },
+    };
   });
 
   // Flex-wrap pack: place each test left-to-right; if the next test would
@@ -159,28 +213,28 @@ function layoutSliceTests(model, options = {}) {
   for (const t of tests) {
     const titleY = t.y + TEST_PAD;
     const givenY = titleY + TEST_TITLE_H;
-    const whenY  = givenY + t.rowH;
-    const thenY  = whenY  + t.rowH;
+    const whenY  = givenY + t.rowHs.given;
+    const thenY  = whenY  + t.rowHs.when;
     const cellX  = t.x + TEST_PAD + ROW_LABEL_W;
 
     t.titleY = titleY;
     t.labels = {
       x: t.x + TEST_PAD,
-      given: givenY + t.rowH / 2,
-      when:  whenY  + t.rowH / 2,
-      then:  thenY  + t.rowH / 2,
+      given: givenY + t.rowHs.given / 2,
+      when:  whenY  + t.rowHs.when  / 2,
+      then:  thenY  + t.rowHs.then  / 2,
     };
     t.rows = {
-      given: positionItems(t.given, cellX, t.cellW, givenY + ROW_PAD, t.itemW, ITEM_H, ITEM_GAP),
-      when:  positionItems(t.when,  cellX, t.cellW, whenY  + ROW_PAD, t.itemW, ITEM_H, ITEM_GAP),
-      then:  positionItems(t.then,  cellX, t.cellW, thenY  + ROW_PAD, t.itemW, ITEM_H, ITEM_GAP),
+      given: positionItems(t.given, cellX, t.cellW, givenY + ROW_PAD, t.itemW, ITEM_GAP, itemHOf),
+      when:  positionItems(t.when,  cellX, t.cellW, whenY  + ROW_PAD, t.itemW, ITEM_GAP, itemHOf),
+      then:  positionItems(t.then,  cellX, t.cellW, thenY  + ROW_PAD, t.itemW, ITEM_GAP, itemHOf),
     };
   }
 
   return { tests, totalW, totalH };
 }
 
-function positionItems(items, colX, colW, y, itemW, itemH, gap) {
+function positionItems(items, colX, colW, y, itemW, gap, itemHOf) {
   if (items.length === 0) return [];
   const stacked = items.length * itemW + (items.length - 1) * gap;
   const startX = colX + (colW - stacked) / 2;
@@ -189,7 +243,7 @@ function positionItems(items, colX, colW, y, itemW, itemH, gap) {
     x: startX + i * (itemW + gap),
     y,
     w: itemW,
-    h: itemH,
+    h: itemHOf(item),
   }));
 }
 
@@ -201,6 +255,9 @@ const ITEM_STYLES = {
   automation:    { fill: "#ffffff", stroke: "#475569", rx: 4, dash: "4 2" },
   ui:            { fill: "#ffffff", stroke: "#475569", rx: 4 },
 };
+
+const ITEM_H_BASE_RENDER = 56;
+const FIELD_LINE_H_RENDER = 16;
 
 export function renderSliceTests(src, target) {
   const model = parseSliceTests(src);
@@ -287,6 +344,9 @@ export function drawInto(svg, model, L) {
 function drawItem(g, item) {
   const style = ITEM_STYLES[item.kind] || ITEM_STYLES.domainEvent;
   const node = g.append("g").attr("class", `item item-${item.kind}`);
+  const hasFields = item.fields && item.fields.length > 0;
+
+  // Item rect spans the full height (heading + optional fields section).
   node
     .append("rect")
     .attr("x", item.x)
@@ -300,9 +360,11 @@ function drawItem(g, item) {
     .attr("stroke-width", 1.5)
     .attr("stroke-dasharray", style.dash || null);
 
+  // Label centered in the heading section (or the whole rect if no fields).
+  const headH = hasFields ? ITEM_H_BASE_RENDER : item.h;
   const lines = wrapLabel(item.label, 14);
   const lineH = 14;
-  const startY = item.y + item.h / 2 - ((lines.length - 1) * lineH) / 2;
+  const startY = item.y + headH / 2 - ((lines.length - 1) * lineH) / 2;
   const text = node
     .append("text")
     .attr("text-anchor", "middle")
@@ -316,6 +378,29 @@ function drawItem(g, item) {
       .attr("y", (_, i) => startY + i * lineH)
       .attr("dominant-baseline", "middle")
       .text((d) => d);
+
+  if (!hasFields) return;
+
+  // Divider between heading and fields.
+  node
+    .append("line")
+    .attr("x1", item.x)
+    .attr("y1", item.y + ITEM_H_BASE_RENDER)
+    .attr("x2", item.x + item.w)
+    .attr("y2", item.y + ITEM_H_BASE_RENDER)
+    .attr("stroke", style.stroke)
+    .attr("stroke-width", 1);
+
+  // Field text lines.
+  item.fields.forEach((f, i) => {
+    node
+      .append("text")
+      .attr("x", item.x + 8)
+      .attr("y", item.y + ITEM_H_BASE_RENDER + 4 + (i + 1) * FIELD_LINE_H_RENDER - 3)
+      .attr("fill", "#374151")
+      .attr("font-size", 10)
+      .text(`${f.name}: ${f.type}`);
+  });
 }
 
 function wrapLabel(text, maxChars) {

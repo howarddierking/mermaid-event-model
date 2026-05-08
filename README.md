@@ -174,6 +174,73 @@ slice registration_slice["Registration"]
 
 The renderer draws a dashed bounding box around the member nodes with the slice's label centered at the top of the box. The indented edges still participate in the overall flow — the slice just groups them visually. Hovering over a slice border highlights it (thicker, darker stroke) so you can identify individual slices when they overlap.
 
+## Slice Tests
+
+The companion `sliceTests` diagram type expresses test specifications for a vertical slice in **Given / When / Then** form. The element kinds (`domainEvent`, `externalEvent`, `command`, `readModel`, `automation`, `ui`) and visual styling match the `eventModel` diagram, so the visual vocabulary is the same on both sides.
+
+```
+sliceTests
+    test["<Title>"]
+        given
+            <kind>["<Label>"] [{ field: type ... }]
+            ...
+        when                           (optional — omit for state-view tests)
+            <kind>["<Label>"] [{ field: type ... }]
+        then
+            <kind>["<Label>"] [{ field: type ... }]
+            ...
+```
+
+Each `test` becomes a self-contained card with `Given` / `When` / `Then` row labels on the left and items stacked horizontally to the right. Items can carry the same brace-delimited typed-field data sections as `eventModel` items. Tests grid-pack into rows that fill the container width, wrapping when the next card would overflow.
+
+Four canonical patterns (state change, state view, external state input, external state output) live in [`blueprint_sliceTests.md`](blueprint_sliceTests.md).
+
+### Authoring tests in slice spec files
+
+The [`spec-slices` skill](#claude-code-plugin) stamps out one markdown spec file per slice declared in your `eventModel`, into a sibling `<model>-slices/` directory. Each spec has three sections:
+
+- `## Model` — a `mermaid` fenced `eventModel` snippet of just this slice's elements + edges, mechanically derived from the parent model. Re-running the skill refreshes this section automatically as the parent model evolves.
+- `## Description` — your prose. Describe the slice's user-visible capability, why it matters, and what invariant it preserves. Edit freely; the skill never overwrites it.
+- `## Tests` — your test specifications, authored in the `sliceTests` DSL inside a `mermaid` fenced block. This section is also user-owned; edit freely.
+
+Inside `## Tests`, write one or more `test[...]` declarations that exercise the slice. Each test should:
+
+- State preconditions in `given` — events that have already occurred, plus any read models that must be present, before the slice runs.
+- Name the action in `when` — usually a `command`. Omit `when` for state-view slices that just project a read model from prior events.
+- Assert outcomes in `then` — emitted events, populated read models, or signals to external systems.
+
+Use data sections on the items to spell out the field-level shape of each precondition or outcome — exactly the same syntax as `eventModel` data sections (`{ name: type ... }`). The model-viewer renders the spec exactly as you'd see it on the diagram, so the prose, the model snippet, and the test assertions all live and travel together as the slice evolves.
+
+A typical state-change spec, schematically:
+
+```
+## Tests
+
+(mermaid fenced block)
+sliceTests
+    test["Books a room when guest is registered and room exists"]
+        given
+            domainEvent["Registered"] {
+                guestId: UUID
+            }
+            domainEvent["Room Added"] {
+                roomId: UUID
+            }
+        when
+            command["Book Room"] {
+                guestId: UUID
+                roomId: UUID
+            }
+        then
+            domainEvent["Room Booked"] {
+                bookingId: UUID
+                guestId: UUID
+                roomId: UUID
+            }
+```
+
+These specs are intended to be the canonical record of each slice's intent and behavior — readable as documentation, parseable for validation, and structured enough to drive code generation downstream.
+
 ## Using it as a Mermaid chart type
 
 Once registered (see [Installation](#installation)), any fenced block whose first line is `eventModel` is routed to our renderer:
@@ -231,7 +298,7 @@ Install it in any project where you're authoring Event Models:
 | --- | --- |
 | `/mermaid-event-model:event-model` | Authors or extends a DSL file from a natural-language description. Adds actors, aggregates, UIs, commands, events, read models, and automations using the project's grammar and conventions. Resolves the target file from the argument or, if absent, the most recently referenced file in the conversation. |
 | `/mermaid-event-model:add-slices` | Analyzes data flow in a DSL file and proposes vertical slice groupings. Identifies command slices (ui → command → event) and read slices (event → readModel → ui/automation), presents them for review, then applies them. |
-| `/mermaid-event-model:spec-slices` | Stamps out one markdown specification file per `slice` declared in the DSL into a sibling directory `<dsl-file>-slices/`. Each spec has a description (prose intent) and a tests section (in the future `eventModelSlice` DSL). Existing files are preserved. Intended to drive both validation and code generation downstream. |
+| `/mermaid-event-model:spec-slices` | Stamps out one markdown specification file per `slice` declared in the DSL into a sibling directory `<dsl-file>-slices/`. Each spec has a Model section (auto-extracted snippet, refreshed on re-run), a Description (prose intent), and a Tests section authored in the [`sliceTests` DSL](#slice-tests). Description and Tests are user-owned and preserved across re-runs. Intended to drive both validation and code generation downstream. |
 | `/mermaid-event-model:validate-completeness` | Checks the [information completeness principle](https://www.pradhan.is/blogs/event-modelling-best-practices) — traces every field in every UI and read model backward through events and commands to verify no data is assumed or missing. Reports gaps with suggested fixes. |
 | `/mermaid-event-model:create-event-model` | Seeds a project with a working Event Model: writes a markdown file (DSL inside a fenced `mermaid` block, defaults to `blueprint_dsl.md`) plus a sibling `model-viewer.html` page that renders it and lists any companion slice specs. Useful for bootstrapping a new model or resetting to the reference example. |
 

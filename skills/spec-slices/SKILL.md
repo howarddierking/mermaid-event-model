@@ -1,6 +1,6 @@
 ---
 name: spec-slices
-description: Generate one specification file per slice declared in an Event Model DSL. Each spec is markdown with a description section (prose intent) and a tests section (in the eventModelSlice DSL — grammar TBD). Specs are written into a sibling directory `<dsl-file>-slices/`. Existing spec files are preserved — only missing ones are created. The specs are intended for both validation and downstream code generation.
+description: Generate one specification file per slice declared in an Event Model DSL. Each spec is markdown with a Model section (auto-extracted slice snippet, refreshed on re-run), a Description section (prose intent), and a Tests section (`sliceTests` DSL inside a mermaid fenced block). Specs are written into a sibling directory `<dsl-file>-slices/`. Re-running the skill refreshes the Model section in existing files but never overwrites Description or Tests. The specs are intended for both validation and downstream code generation.
 argument-hint: [dsl-file-path]
 ---
 
@@ -58,7 +58,7 @@ If absent:
 
 - **Don't modify the DSL file.** This skill is read-only with respect to the input; it only writes spec files in the sibling directory.
 - **The Model section IS authored** (it's mechanically derived from the parent eventModel and is meant to be a faithful clip of the slice's portion). The Description and Tests sections, on the other hand, should remain as placeholder prompts — the user fills those in. Don't invent prose or tests.
-- **The `eventModelSlice` test grammar is TBD.** The template's tests block is intentionally a placeholder. Once the grammar is defined, revise `template.md` and re-running this skill will only create files for newly-added slices — existing specs stay untouched.
+- **The Tests section uses the `sliceTests` DSL** inside a `mermaid` fenced block, so it renders as a Given / When / Then test card in the model viewer alongside the slice's Model section. The template ships with a single `test["…"]` skeleton; the user fills in the actual preconditions, action, and outcomes. See the README's "Slice Tests" section for the grammar.
 - If the DSL file has zero slice declarations, report that and skip creating the directory.
 
 ## Re-running the skill

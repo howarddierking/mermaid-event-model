@@ -1,6 +1,6 @@
 # blueprint_sliceTests
 
-Reference set of slice-test patterns matching Adam Dymitruk's four canonical Event Modeling test types: state change, state view, external state input, and external state output.
+Reference set of slice-test patterns matching Adam Dymitruk's four canonical Event Modeling test types: state change, state view, external state input, and external state output. The State Change test demonstrates the data-section syntax — commands, events, and read models can carry typed fields the same way they do in eventModel diagrams.
 
 ## Model
 
@@ -8,19 +8,41 @@ Reference set of slice-test patterns matching Adam Dymitruk's four canonical Eve
 sliceTests
 	test["State Change"]
 		given
-			domainEvent["Registered"]
-			domainEvent["Room Added"]
+			domainEvent["Registered"] {
+				guestId: UUID
+				name: string
+				email: string
+			}
+			domainEvent["Room Added"] {
+				roomId: UUID
+				roomNumber: int
+				roomType: string
+			}
 		when
-			command["Book Room"]
+			command["Book Room"] {
+				guestId: UUID
+				roomId: UUID
+				checkIn: date
+				checkOut: date
+			}
 		then
-			domainEvent["Room Booked"]
+			domainEvent["Room Booked"] {
+				bookingId: UUID
+				guestId: UUID
+				roomId: UUID
+				bookedAt: timestamp
+			}
 
 	test["State View"]
 		given
 			domainEvent["Paid"]
 			domainEvent["Paid"]
 		then
-			readModel["Sales Report"]
+			readModel["Sales Report"] {
+				totalRevenue: decimal
+				transactionCount: int
+				averageBookingValue: decimal
+			}
 
 	test["External State Input"]
 		given
@@ -36,7 +58,12 @@ sliceTests
 
 	test["External State Output"]
 		given
-			readModel["Stay Notifications to Send"]
+			readModel["Stay Notifications to Send"] {
+				notificationId: UUID
+				guestId: UUID
+				message: string
+				scheduledAt: timestamp
+			}
 		when
 			command["Send Notification"]
 		then
