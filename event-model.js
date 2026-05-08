@@ -449,16 +449,10 @@ function layoutEventModel(model) {
       }
     }
 
-    // Width needed for the widest reads line (prefixed with "« ").
-    let maxReadW = 0;
-    if (el.reads && el.reads.length > 0) {
-      for (const r of el.reads) {
-        const rw = (r.length + 2) * FIELD_CHAR_W + FIELD_PAD;
-        if (rw > maxReadW) maxReadW = rw;
-      }
-    }
-
-    return Math.max(NODE_W_MIN, maxLabelW, maxFieldW, maxReadW);
+    // `reads` tags do NOT widen the command box — they overflow to the
+    // right of the box and into the column gutter. Width is determined by
+    // labels and fields only.
+    return Math.max(NODE_W_MIN, maxLabelW, maxFieldW);
   };
 
   // Use a uniform node width sized to the widest element.
@@ -472,16 +466,14 @@ function layoutEventModel(model) {
 
   const COL_W = NODE_W + COL_GAP;
 
-  // Per-element height: base heading + optional fields section + optional reads section.
+  // Per-element height: base heading + optional fields section. `reads`
+  // entries no longer add height — they render as small tags overlaid on
+  // the heading section in the upper-right.
   const nodeH = (el) => {
     if (el.kind === "automation") return AUTOMATION_NODE_H;
     const hasFields = el.fields && el.fields.length > 0;
-    const hasReads = el.reads && el.reads.length > 0;
-    if (!hasFields && !hasReads) return NODE_H_BASE;
-    let h = NODE_H_BASE;
-    if (hasFields) h += el.fields.length * FIELD_LINE_H + 4;
-    if (hasReads) h += el.reads.length * FIELD_LINE_H + 4;
-    return h;
+    if (!hasFields) return NODE_H_BASE;
+    return NODE_H_BASE + el.fields.length * FIELD_LINE_H + 4;
   };
 
   // Track the tallest stack per lane for lane sizing.
@@ -505,7 +497,73 @@ function layoutEventModel(model) {
 
   let maxCol = 0;
   for (const v of rank.values()) if (v > maxCol) maxCol = v;
-  const totalW = MARGIN_L + (maxCol + 1) * COL_W + MARGIN_R;
+
+  // Tag-overflow accounting: a command's `reads` tags overflow to the right
+  // of the box, into the column gutter and possibly into the following
+  // column. Where they would land on top of the next-column element, push
+  // that column further right by the overflow amount + a small buffer.
+  // Tag-rendering constants must mirror the values used in `drawInto`.
+  const TAG_NOTCH_L      = 9;
+  const TAG_HOLE_GAP_L   = 6;
+  const TAG_HOLE_R_L     = 2.2;
+  const TAG_LEFT_TX_L    = 5;
+  const TAG_RIGHT_TX_L   = 6;
+  const TAG_LEFT_GAP_L   = 8;
+  const TAG_CHAR_W_L     = 6.5;
+  const TAG_OVERFLOW_PAD = 6;
+
+  const labelById = new Map(elements.map((e) => [e.id, e.label]));
+  const cmdTagOverflow = new Map(); // id → overflow past command's right edge
+
+  for (const el of elements) {
+    if (el.kind !== "command" || !el.reads || el.reads.length === 0) continue;
+    let uniformTagW = 0;
+    for (const r of el.reads) {
+      const txt = labelById.get(r) || r;
+      const w =
+        TAG_NOTCH_L + TAG_HOLE_GAP_L + TAG_HOLE_R_L + TAG_LEFT_TX_L +
+        txt.length * TAG_CHAR_W_L + TAG_RIGHT_TX_L;
+      if (w > uniformTagW) uniformTagW = w;
+    }
+    const lines = wrapLabel(el.label, 20);
+    const labelMaxLen = lines.length
+      ? Math.max(...lines.map((l) => l.length))
+      : 0;
+    const titleHalfW = (labelMaxLen * LABEL_CHAR_W) / 2;
+    const tagRightRel = NODE_W / 2 + titleHalfW + TAG_LEFT_GAP_L + uniformTagW;
+    const overflow = Math.max(0, tagRightRel - NODE_W);
+    if (overflow > 0) cmdTagOverflow.set(el.id, overflow);
+  }
+
+  // Per-column extra spacing inserted BEFORE that column's left edge.
+  const colExtraSpace = new Map();
+  for (const [id, overflow] of cmdTagOverflow) {
+    const intoNextCol = overflow - COL_GAP;
+    if (intoNextCol <= 0) continue;
+    const targetCol = rank.get(id) + 1;
+    const need = intoNextCol + TAG_OVERFLOW_PAD;
+    if (need > (colExtraSpace.get(targetCol) || 0)) {
+      colExtraSpace.set(targetCol, need);
+    }
+  }
+
+  // Build per-column x positions with the extra space baked in.
+  const colXMap = new Map();
+  let xCursor = MARGIN_L;
+  for (let c = 0; c <= maxCol; c++) {
+    xCursor += colExtraSpace.get(c) || 0;
+    colXMap.set(c, xCursor);
+    xCursor += COL_W;
+  }
+
+  // If a command at the rightmost column has a tag overflow, there's no
+  // column to push — extend the canvas instead.
+  let rightExtra = 0;
+  for (const [id, overflow] of cmdTagOverflow) {
+    if (rank.get(id) !== maxCol) continue;
+    if (overflow > rightExtra) rightExtra = overflow;
+  }
+  const totalW = xCursor + rightExtra + MARGIN_R;
 
   const pos = new Map();
   for (const [k, arr] of cells) {
@@ -517,7 +575,7 @@ function layoutEventModel(model) {
     for (const el of arr) totalSubH += nodeH(el);
     totalSubH += Math.max(0, nSub - 1) * SUB_GAP;
     let curY = lr.y + (lr.h - totalSubH) / 2;
-    const cx = MARGIN_L + col * COL_W + COL_W / 2;
+    const cx = colXMap.get(col) + COL_W / 2;
     const nx = cx - NODE_W / 2;
     for (const el of arr) {
       const h = nodeH(el);
@@ -862,11 +920,10 @@ export function drawInto(svg, model, L) {
   // strip for automation nodes (so the label sits above the gear image).
   nodeG.each(function (d) {
     const hasFields = d.el.fields && d.el.fields.length > 0;
-    const hasReads = d.el.reads && d.el.reads.length > 0;
     const isAutomation = d.el.kind === "automation";
     const headH = isAutomation
       ? AUTOMATION_LABEL_H
-      : hasFields || hasReads
+      : hasFields
       ? HEADING_H
       : d.h;
     const lines = wrapLabel(d.el.label, 20);
@@ -887,17 +944,13 @@ export function drawInto(svg, model, L) {
         .text((ln) => ln);
   });
 
-  // --- Fields & reads sections (class-diagram style, below dividers) -----
+  // --- Fields section (class-diagram style, below a divider) ------------
   const hasFields = (d) => d.el.fields && d.el.fields.length > 0;
-  const hasReads = (d) => d.el.reads && d.el.reads.length > 0;
-  const hasSections = (d) => hasFields(d) || hasReads(d);
-  const withSections = nodeG.filter(hasSections);
+  const hasReads = (d) =>
+    d.el.kind === "command" && d.el.reads && d.el.reads.length > 0;
   const withFields = nodeG.filter(hasFields);
   const withReads = nodeG.filter(hasReads);
-
-  // Y-offset where the reads section starts (after heading + optional fields).
-  const readsOffsetOf = (d) =>
-    HEADING_H + (hasFields(d) ? d.el.fields.length * FIELD_LINE_H + 4 : 0);
+  const withSections = withFields; // chevron only governs the data section
 
   // Divider above the fields section.
   withFields
@@ -910,18 +963,9 @@ export function drawInto(svg, model, L) {
     .attr("stroke", (d) => NODE_STYLES[d.el.kind].stroke)
     .attr("stroke-width", 1);
 
-  // Divider above the reads section.
-  withReads
-    .append("line")
-    .attr("class", "reads-divider")
-    .attr("x1", 0)
-    .attr("y1", readsOffsetOf)
-    .attr("x2", (d) => d.w)
-    .attr("y2", readsOffsetOf)
-    .attr("stroke", (d) => NODE_STYLES[d.el.kind].stroke)
-    .attr("stroke-width", 1);
-
   // Toggle chevron icon in the heading section.
+  // Stop propagation so the click doesn't fall through to the chevron's own
+  // handler and re-toggle. (The chevron is a <g> sibling of the rect.)
   const chevronG = withSections
     .append("g")
     .attr("class", "toggle-indicator")
@@ -964,22 +1008,78 @@ export function drawInto(svg, model, L) {
     });
   });
 
-  // Reads group: each entry prefixed with "« " to indicate a consume.
-  const readsG = withReads
-    .append("g")
-    .attr("class", "reads-section")
-    .attr("transform", (d) => `translate(0,${readsOffsetOf(d)})`);
+  // Reads tags: each `reads [...]` entry on a command renders as a small
+  // tag (left-pointing notch, "string hole" near the point, label to the
+  // right) overlaid in the upper-right of the command box. Tags stack
+  // vertically when there's more than one. They sit above the fields
+  // section so the chevron's collapse never hides them.
+  const TAG_H = 18;
+  const TAG_NOTCH = 9;
+  const TAG_HOLE_R = 2.2;
+  const TAG_HOLE_GAP = 6;
+  const TAG_LEFT_TEXT_PAD = 5;
+  const TAG_RIGHT_TEXT_PAD = 6;
+  const TAG_TOP = 6;
+  const TAG_GAP = 3;
+  const TAG_RIGHT_INSET = 6;
+  const TAG_CHAR_W = 6.5;
 
-  readsG.each(function (d) {
-    const g = d3.select(this);
+  // Resolve each `reads` id to the referenced element's display label.
+  const labelById = new Map(L.elements.map((e) => [e.id, e.label]));
+
+  withReads.each(function (d) {
+    const tagsG = d3.select(this).append("g").attr("class", "reads-tags");
+
+    // All tags within one command share the width of the widest entry so
+    // their notches and right edges line up cleanly.
+    let uniformTagW = 0;
+    for (const r of d.el.reads) {
+      const txt = labelById.get(r) || r;
+      const w =
+        TAG_NOTCH + TAG_HOLE_GAP + TAG_HOLE_R + TAG_LEFT_TEXT_PAD +
+        txt.length * TAG_CHAR_W + TAG_RIGHT_TEXT_PAD;
+      if (w > uniformTagW) uniformTagW = w;
+    }
+
+    // Anchor the tag column to just past the centered title's right edge.
+    // The tag block extends rightward from there, overflowing the command
+    // box if the labels are long. The layout pass already pushes any
+    // affected next-column element further right so the tag isn't hidden.
+    const LABEL_CHAR_W_LOCAL = 7;
+    const lines = wrapLabel(d.el.label, 20);
+    const labelMaxLen = lines.length
+      ? Math.max(...lines.map((l) => l.length))
+      : 0;
+    const titleHalfW = (labelMaxLen * LABEL_CHAR_W_LOCAL) / 2;
+    const TAG_LEFT_GAP = 8;
+    const tagX = d.w / 2 + titleHalfW + TAG_LEFT_GAP;
+
     d.el.reads.forEach((r, i) => {
-      g.append("text")
-        .attr("x", 8)
-        .attr("y", 4 + (i + 1) * FIELD_LINE_H - 3)
-        .attr("fill", "#475569")
+      const txt = labelById.get(r) || r;
+      const y = TAG_TOP + i * (TAG_H + TAG_GAP);
+      const tg = tagsG.append("g").attr("transform", `translate(${tagX},${y})`);
+      const path =
+        `M ${TAG_NOTCH},0 L ${uniformTagW},0 L ${uniformTagW},${TAG_H} ` +
+        `L ${TAG_NOTCH},${TAG_H} L 0,${TAG_H / 2} Z`;
+      tg.append("path")
+        .attr("d", path)
+        .attr("fill", "#fef3c7")
+        .attr("stroke", "#854d0e")
+        .attr("stroke-width", 1);
+      tg.append("circle")
+        .attr("cx", TAG_NOTCH + TAG_HOLE_GAP)
+        .attr("cy", TAG_H / 2)
+        .attr("r", TAG_HOLE_R)
+        .attr("fill", "none")
+        .attr("stroke", "#854d0e")
+        .attr("stroke-width", 1);
+      tg.append("text")
+        .attr("x", TAG_NOTCH + TAG_HOLE_GAP + TAG_HOLE_R + TAG_LEFT_TEXT_PAD)
+        .attr("y", TAG_H / 2 + 0.5)
+        .attr("dominant-baseline", "middle")
         .attr("font-size", 10)
-        .attr("font-style", "italic")
-        .text(`« ${r}`);
+        .attr("fill", "#3f2502")
+        .text(txt);
     });
   });
 
@@ -1065,7 +1165,7 @@ export function drawInto(svg, model, L) {
     globalThis.__emToggleFields = function (nodeGroup) {
       const g = nodeGroup.closest(".node");
       const collapsibles = g.querySelectorAll(
-        ".fields-section, .reads-section, .field-divider, .reads-divider"
+        ".fields-section, .field-divider"
       );
       const chevron = g.querySelector(".toggle-indicator");
       const bgRect = g.querySelector(".node-bg");
