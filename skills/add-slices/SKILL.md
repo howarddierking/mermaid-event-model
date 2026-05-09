@@ -1,12 +1,12 @@
 ---
 name: add-slices
-description: Analyze an Event Model DSL file and automatically add slice declarations based on data flow direction. Slices group contiguous chains of edges that flow together through the canonical event modeling pattern.
+description: Analyze an Event Model DSL file and (re)write its `slice` declarations from scratch based on the edges currently in the file. Strips any existing slices first so re-running cleanly replaces stale slices instead of accumulating them. Splits cleanly at automations so a single chain that crosses the read-side / command-side boundary becomes two slices, not one.
 argument-hint: [dsl-file-path]
 ---
 
 # Add Slices to an Event Model DSL
 
-You are analyzing an Event Model DSL file and adding `slice` declarations that group related elements into vertical slices based on data flow.
+You are analyzing an Event Model DSL file and writing `slice` declarations that group its edges into vertical slices.
 
 ## Input
 
@@ -14,100 +14,129 @@ Read the DSL file at: `$ARGUMENTS`
 
 If no argument is provided, default to `blueprint_dsl.md` in the project root.
 
-**DSL files are markdown.** Each one is a `.md` file whose DSL lives inside a fenced ```mermaid block whose first content line is `eventModel`. When you parse the file for slices, look at the lines INSIDE that fence. When you write `slice` declarations back into the file, insert them INSIDE the same fence — preserving the existing tab indentation. Don't add any markdown content outside the fence and don't move the fence boundaries.
+**DSL files are markdown.** Each is a `.md` file whose DSL lives inside a fenced ```mermaid block whose first content line is `eventModel`. When you parse the file, look at the lines INSIDE that fence. When you write the new slice declarations, write them INSIDE the same fence. Don't add markdown content outside the fence and don't move the fence boundaries.
 
-## Background: What is a slice?
+## Background: what is a slice?
 
-In Event Modeling, a **vertical slice** is a cohesive unit of behavior that cuts across the horizontal timeline. Each slice represents one user-visible capability — the full path from trigger to outcome.
+In Event Modeling a **vertical slice** is a cohesive unit of behavior cutting across the horizontal timeline — one user-visible capability from trigger to outcome. Slices come in exactly two shapes:
 
-There are two kinds of slices, determined by the **direction of data flow**:
+- **Command slices** (write-side): a user or automation issues a command that produces a domain event.
+  - Canonical: `(ui | automation) → command → domainEvent`
+- **Read slices** (read-side): a domain event populates a read model that's consumed by a UI or automation.
+  - Canonical: `domainEvent → readModel → (ui | automation)` (or any prefix/suffix of that chain)
 
-### Command slices (left-to-right / top-to-bottom)
-A user (or automation) issues a command that produces a domain event. The canonical pattern is:
+A slice never mixes the two sides. The two are joined at the seams by elements that act as **boundary nodes**:
+
+- A `domainEvent` is the OUTPUT of a command slice and the INPUT of a read slice. It appears in both.
+- An `automation` is the TARGET of a read slice (`readModel → automation`) and the SOURCE of a command slice (`automation → command`). It appears in both.
+
+## Algorithm
+
+This skill is **idempotent**. On every run:
+
+1. **Strip every existing `slice` declaration** from the DSL. Each existing `slice <id>["Label"]` block contributes its indented `-->` edges back to the global edge set as bare edges. After this step the file's mermaid block contains only element declarations and bare edges — the same shape it had before any prior run of this skill.
+
+2. **Classify every edge** by its `(source-kind, target-kind)` pair into one of three buckets:
+
+   | Source kind | Target kind | Bucket |
+   |---|---|---|
+   | `ui` | `command` | command-side |
+   | `automation` | `command` | command-side |
+   | `domainEvent` | `command` | command-side (event-triggered translator) |
+   | `externalEvent` | `command` | command-side (external trigger) |
+   | `command` | `domainEvent` | command-side |
+   | `domainEvent` | `readModel` | read-side |
+   | `externalEvent` | `readModel` | read-side |
+   | `readModel` | `ui` | read-side |
+   | `readModel` | `automation` | read-side |
+
+   Edges that don't match any of those rows (e.g. an automation directly emitting an event without a command in between) are recorded separately and surfaced to the user as "unclassified edges that won't be sliced". Don't try to invent a slice for them.
+
+3. **Group edges into slices by connected component, within each side, using the connector rules below.** Two edges are connected when they share a node that is a CONNECTOR. Edges that share a non-connector node are NOT connected — they go in different slices.
+
+   | Node kind | Connector for command-side? | Connector for read-side? |
+   |---|---|---|
+   | `command` | yes | n/a (never appears) |
+   | `readModel` | n/a | yes (unless fan-in — see step 4) |
+   | `ui` | no | no |
+   | `automation` | no | no |
+   | `domainEvent` | no | no |
+   | `externalEvent` | no | no |
+
+   The intuition: a `command` packages its trigger and its produced event into one slice; a `readModel` packages its incoming event and its outgoing consumer(s) into one slice. Everything else is a boundary — it can appear in multiple slices but never glues them together.
+
+4. **Read-side fan-in exception.** When a `readModel` has ≥2 incoming `domainEvent`/`externalEvent` edges, treat it as a NON-connector for grouping read-side edges. The renderer already draws this pattern with one stub per producing event, so splitting the slices matches the visual:
+
+   - Emit one **per-event read slice** for each `event → readModel` edge (no consumer in this slice). Name as `feed_<event>` or `update_<readModel>_<event>`.
+   - Emit one **view slice** containing the `readModel → consumer` edges (every UI/automation that consumes the read model goes in this slice). Name as `view_<readModel>`.
+
+5. **Naming conventions.**
+
+   - Command slices: name from the COMMAND in the chain (e.g. `book_room["Book Room"]`, `process_payment["Process Payment"]`).
+   - Non-fan-in read slices: name from the read model and/or its consumer (e.g. `view_room_availability["View Room Availability"]`, `update_guest_roster["Update Guest Roster"]`).
+   - Fan-in per-event slices: `feed_<event>` or `update_<readModel>_<event>`.
+   - Fan-in view slice: `view_<readModel>`.
+   - Use snake_case for ids and a human-readable string in the label.
+
+6. **Boundary nodes appear in multiple slices.** This is correct, not a duplicate:
+
+   - A `domainEvent` is the OUTPUT of its command slice and the INPUT of its read slice(s). It's named in both.
+   - An `automation` that consumes a read model AND issues a command is the TARGET of one read slice (`readModel → automation`) and the SOURCE of one command slice (`automation → command → ...`). The read-side edge ends in the read slice; the command-side edge begins in the command slice; the automation node is named in both but the slices have completely disjoint edge lists.
+
+7. **Generate the slice block in the file**, in the mermaid fence, replacing whatever slice content was stripped in step 1:
+
+   - Use one tab for the `slice` declaration.
+   - Use two tabs for the `-->` edges inside the slice.
+   - Group slices in roughly the order their elements appear in the DSL so the diff stays readable.
+   - Preserve a blank line between conceptual sections (auth slices, payment slices, etc.) when the parent file had them.
+
+8. **Verify** every edge is accounted for: every edge that was bare in step 1 should now sit inside exactly one slice (or be on the unclassified list and explicitly skipped). If any edge is in zero slices or two slices, surface that as an error before writing.
+
+## Worked example: an automation that closes a loop
+
+Given these unsliced edges (a typical hotel-booking payment-processing fragment):
 
 ```
-ui → command → domainEvent
+paymentRequested-->paymentsToProcess
+paymentsToProcess-->paymentProcessor
+paymentProcessor-->processPayment
+processPayment-->paymentSucceeded
+paymentSucceeded-->paymentsToProcess
 ```
 
-or
+…where `paymentsToProcess` is a `readModel`, `paymentProcessor` is an `automation`, `processPayment` is a `command`, and the others are `domainEvent`s — classify each edge:
+
+| Edge | Bucket |
+|---|---|
+| `paymentRequested → paymentsToProcess` | read-side |
+| `paymentsToProcess → paymentProcessor` | read-side |
+| `paymentProcessor → processPayment` | command-side |
+| `processPayment → paymentSucceeded` | command-side |
+| `paymentSucceeded → paymentsToProcess` | read-side |
+
+`paymentsToProcess` has 2 incoming domain-event edges (from `paymentRequested` and `paymentSucceeded`) → fan-in, so the read-side splits accordingly. `paymentProcessor` is a boundary automation: it sits at the END of one read-side group and the START of one command-side group, but its read-side and command-side edges go in different slices.
+
+Result — four slices, three on the read side and one on the command side:
 
 ```
-automation → command → domainEvent
+slice show_payments_to_process["Show Payments to Process"]
+    paymentRequested-->paymentsToProcess
+
+slice update_payment_status["Update Payment Status"]
+    paymentSucceeded-->paymentsToProcess
+
+slice trigger_payment_processing["Trigger Payment Processing"]
+    paymentsToProcess-->paymentProcessor
+
+slice process_payment["Process Payment"]
+    paymentProcessor-->processPayment
+    processPayment-->paymentSucceeded
 ```
 
-These represent **write-side** behavior: something happens that changes state.
-
-### Read/View slices (right-to-left / bottom-to-top)
-A domain event populates a read model, which is then consumed by a UI or automation. The canonical pattern is:
-
-```
-domainEvent → readModel → ui
-```
-
-or
-
-```
-domainEvent → readModel → automation
-```
-
-These represent **read-side** behavior: state is projected and presented.
-
-## How to identify slices
-
-1. **Parse the DSL** to extract all elements (with their types) and edges.
-2. **Skip edges that are already inside an existing `slice` block.** Only analyze unsliced edges.
-3. **Build chains** by following connected edges. A chain continues as long as:
-   - The edges flow in a consistent direction through the canonical pattern (`ui → command → domainEvent → readModel → ui/automation`)
-   - The direction doesn't reverse mid-chain (a command slice doesn't include the downstream read model consumption, and a read slice doesn't include the upstream command that produced the event)
-4. **Determine slice boundaries** by recognizing where direction changes:
-   - A `domainEvent → readModel` edge starts a NEW read slice (even if the event was the tail of a command slice)
-   - A `readModel → ui` or `readModel → automation` edge continues a read slice
-   - A `ui → command` or `automation → command` edge starts a NEW command slice
-   - A `command → domainEvent` edge continues a command slice
-5. **Name each slice** with a descriptive label derived from the primary action or outcome. Use snake_case for the id and a human-readable string in the label.
-
-## Slice boundary rules
-
-- A single domain event may appear in BOTH a command slice (as the output) and a read slice (as the input). This is correct — the event is the hinge point between write and read sides.
-- Read models that feed into a UI or automation usually include that consumer in the slice. A read slice of `event → readModel` followed by `readModel → ui` is a single connected flow and should be one slice — EXCEPT in the fan-in case below.
-- **Fan-in read models (≥2 incoming domain/external event edges):** the renderer draws this pattern with one stub per producing event. Bundling each event chain through to the consumer would produce N overlapping slices that span from each event all the way to the consumer. Instead, split it:
-  - One **per-event read slice** for each `event → readModel` edge (no consumer in this slice). Name these like `feed_<event>` or `update_<readmodel>_<event>`.
-  - One **view slice** containing the single `readModel → ui/automation` edge. Name this like `view_<readmodel>`.
-  This produces N+1 slices total instead of N wide ones, and each one is compact.
-- Automation loops (e.g., `readModel → automation → command → event → readModel`) should be split into a read slice (readModel → automation) and a command slice (automation → command → event).
-- If an edge connects two elements across what would be different slices (e.g., a domain event feeding a read model that's part of a different flow), that edge forms its own read slice or extends an existing one.
-
-## Example
-
-Given these unsliced edges:
-
-```
-avail-->booking_ui
-booking_ui-->bookRoom
-bookRoom-->booked
-```
-
-This produces TWO slices:
-
-1. **Read slice**: `avail → booking_ui` (read model consumed by UI)
-2. **Command slice**: `booking_ui → bookRoom → booked` (UI triggers command producing event)
-
-```
-slice show_availability["Show Availability"]
-    avail-->booking_ui
-
-slice book_room["Book Room"]
-    booking_ui-->bookRoom
-    bookRoom-->booked
-```
+Note specifically that `paymentProcessor` appears in BOTH the `trigger_payment_processing` slice (as the target of a read-side edge) AND the `process_payment` slice (as the source of a command-side edge). That's correct: an automation's read-side observation is one slice, the command it then issues is a different slice. They never get bundled.
 
 ## Output
 
-1. First, present your analysis: list each group of edges you identified, the flow direction, and the proposed slice name. Ask the user to confirm before modifying the file.
-2. After confirmation, modify the DSL file to:
-   - Replace the bare edges with `slice` blocks
-   - Use one tab of indentation for the slice declaration (matching sibling elements)
-   - Use two tabs of indentation for edges inside the slice
-   - Preserve blank lines between sections for readability
-   - Keep any existing slices unchanged
-3. Verify the result parses correctly by checking that every edge references a declared element id.
+1. Show the user your analysis: list the existing slices you'll strip, the edges you'll re-classify, and the proposed new slice set with each slice's edges. Flag any unclassified edges. Ask the user to confirm before modifying the file.
+2. After confirmation, modify the DSL file to match — strip then rewrite, preserving everything outside the slice declarations.
+3. Re-read the file and confirm the round trip: every bare edge from step 1 is in exactly one new slice, no slice references unknown ids, and all element/edge declarations outside the slices are unchanged.
