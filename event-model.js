@@ -1030,14 +1030,31 @@ export function drawInto(svg, model, L) {
   withReads.each(function (d) {
     const tagsG = d3.select(this).append("g").attr("class", "reads-tags");
 
+    // Measure each read's actual rendered text width by appending an
+    // off-screen <text> element and reading getComputedTextLength().
+    // This avoids the per-character heuristic over-estimating tag widths
+    // for labels that contain spaces or narrow characters (issue #2).
+    const measured = d.el.reads.map((r) => {
+      const txt = labelById.get(r) || r;
+      const probe = tagsG
+        .append("text")
+        .attr("font-size", 10)
+        .attr("visibility", "hidden")
+        .text(txt);
+      const measuredW = probe.node().getComputedTextLength() || 0;
+      probe.remove();
+      // Fall back to the heuristic if measurement fails (detached SVG, etc.).
+      const textW = measuredW > 0 ? measuredW : txt.length * TAG_CHAR_W;
+      return { txt, textW };
+    });
+
     // All tags within one command share the width of the widest entry so
     // their notches and right edges line up cleanly.
     let uniformTagW = 0;
-    for (const r of d.el.reads) {
-      const txt = labelById.get(r) || r;
+    for (const m of measured) {
       const w =
         TAG_NOTCH + TAG_HOLE_GAP + TAG_HOLE_R + TAG_LEFT_TEXT_PAD +
-        txt.length * TAG_CHAR_W + TAG_RIGHT_TEXT_PAD;
+        m.textW + TAG_RIGHT_TEXT_PAD;
       if (w > uniformTagW) uniformTagW = w;
     }
 
@@ -1054,8 +1071,7 @@ export function drawInto(svg, model, L) {
     const TAG_LEFT_GAP = 8;
     const tagX = d.w / 2 + titleHalfW + TAG_LEFT_GAP;
 
-    d.el.reads.forEach((r, i) => {
-      const txt = labelById.get(r) || r;
+    measured.forEach(({ txt }, i) => {
       const y = TAG_TOP + i * (TAG_H + TAG_GAP);
       const tg = tagsG.append("g").attr("transform", `translate(${tagX},${y})`);
       const path =
