@@ -1,6 +1,6 @@
 ---
 name: spec-slices
-description: Generate one specification file per slice declared in an Event Model DSL. Each spec is markdown with a Model section (auto-extracted slice snippet, refreshed on re-run), a Description section (prose intent), and a Tests section (`sliceTests` DSL inside a mermaid fenced block). Specs are written into a sibling directory `<dsl-file>-slices/`. Re-running the skill refreshes the Model section in existing files but never overwrites Description or Tests. The specs are intended for both validation and downstream code generation.
+description: Generate one specification file per slice declared in an Event Model DSL. Each spec is markdown with a Model section (auto-extracted slice snippet, refreshed on re-run), a Description section (prose intent), and a Tests section (`sliceTests` DSL inside a mermaid fenced block). Specs are written into a sibling directory `<dsl-file>-slices/`. Re-running is repeatable: alive slices keep their Description/Tests, the Model section is refreshed against the current DSL, and orphan files (whose slice id no longer exists in the DSL) are checked for authored content — empty orphans are deleted silently, orphans with prose or real tests prompt the user to pick which current slice to move the content to so no authored data is ever lost.
 argument-hint: [dsl-file-path]
 ---
 
@@ -52,7 +52,36 @@ If absent:
      5. Do NOT modify any other section. The Description and Tests sections — and any custom sections the user may have added below — must round-trip unchanged.
      6. Write the file back.
 
-5. **Report the result** to the user: list which spec files were created (didn't exist before), which had their Model section refreshed (existed and the Model body changed), and which were unchanged (existed and the Model body was already current). Total counts are useful too.
+5. **Detect and resolve orphan spec files** — files in the spec directory whose slice id no longer matches any current slice in the DSL. This step runs AFTER step 4 (so newly-created destination files exist and can receive moved content).
+
+   For every `.md` file in the spec directory:
+
+   1. Extract the slice id from the file's `<!-- slice id: <id> -->` comment near the top.
+   2. If that id is in the set of current slice ids, the file is alive — already handled by step 4. Skip.
+   3. Otherwise the file is an **orphan** — its slice was renamed, removed, or split since this file was last stamped.
+
+   For each orphan, read the file and compare its `## Description` and `## Tests` sections to the corresponding sections in `template.md` (the same template used to stamp new files). Treat a section as **unmodified** when its content matches the template's body modulo whitespace. Treat it as **authored** otherwise — i.e., the user has written prose in the Description or replaced the placeholder `test["Describe what this test verifies"]` skeleton with real test declarations.
+
+   Then handle the orphan:
+
+   - **No authored content** (both Description and Tests are unmodified placeholders): the file is just a leftover stub from a slice that no longer exists. Delete it silently and report the cleanup.
+
+   - **Authored content present**: do NOT delete. Prompt the user with:
+     - The orphan's filename and the now-defunct slice id from its comment.
+     - A short preview (first ~200 chars) of each authored section.
+     - A numbered list of every CURRENT slice (id + label) so they can pick a destination.
+     - Plus two non-slice options: `skip` (leave the orphan as-is — it'll surface again next run) and `delete` (remove the file along with its content; only on explicit confirmation).
+
+     If the user picks a current slice as the destination:
+     1. Read the destination spec file (created or refreshed in step 4) and inspect its Description and Tests sections.
+     2. For each section the orphan has authored content for:
+        - If the destination's section is still the unmodified template placeholder, REPLACE it with the orphan's authored content.
+        - If the destination already has authored content, surface the conflict — show both, ask the user how to resolve (keep destination, overwrite with orphan's, or move orphan to a different slice).
+     3. Write the destination back, then delete the orphan file.
+
+   Process orphans one at a time so the user can give a different answer per file. When all orphans are resolved, proceed to the report.
+
+6. **Report the result** to the user: list which spec files were created (didn't exist before), which had their Model section refreshed (existed and the Model body changed), which were unchanged (existed and the Model body was already current), which orphans were deleted (unmodified placeholder), and which orphans were merged into other slices (with destination noted). Total counts are useful too.
 
 ## Notes
 
@@ -63,13 +92,13 @@ If absent:
 
 ## Re-running the skill
 
-The skill is re-runnable as the parent eventModel evolves. Each invocation:
+The skill is built to be run repeatedly as the parent eventModel evolves, without ever losing data the user has authored. Each invocation:
 
-- Creates spec files for any new slices that don't yet have one (using the template).
-- Refreshes the `## Model` section of every existing spec file to reflect the latest declarations and edges.
-- Leaves the Description, Tests, and any custom sections in existing files untouched.
+- **Creates** spec files for any new slices that don't yet have one (using the template).
+- **Refreshes** the `## Model` section of every existing spec file whose slice is still alive in the DSL, against the latest declarations and edges. Description, Tests, and any custom sections in those files are untouched.
+- **Detects orphans** — files whose slice id no longer matches any current slice (because the slice was renamed, removed, or split). Orphans whose Description and Tests are still the unmodified placeholders are deleted as cleanup. Orphans with authored content (prose in Description, real `test["..."]` declarations, or any other deliberate edit) trigger an interactive prompt: the skill shows the orphan, lists every current slice, and asks which one to move the authored content to. The user can also choose to skip (defer) or delete (with confirmation).
 
-This means you can keep editing the parent eventModel — adding fields, renaming an event, splitting a slice — and re-run the skill to bring the auto-generated Model sections back in sync without losing any prose you've written in Description or Tests.
+This means you can rename a slice, split a slice into two, or swap out the underlying eventModel structure, and a re-run will leave you with: (a) every current slice having a spec file, (b) Model sections always in sync with the live DSL, (c) every line of authored prose or test you've written either still in its slice or interactively resettled into one you choose. No content is lost silently.
 
 ## Refining the template
 
