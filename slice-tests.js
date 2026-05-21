@@ -17,6 +17,8 @@ import * as d3 from "d3";
 //               command["<Label>"]
 //           then
 //               domainEvent["<Label>"]
+//               error["<Message>"]    (expected rejection — code-gen maps
+//                                       to throwing a domain exception)
 //               ...
 //
 // Each test renders as a self-contained card with its own Given / When / Then
@@ -25,8 +27,9 @@ import * as d3 from "d3";
 // using the same syntax as the eventModel chart type. Tests grid-pack into
 // rows that fill the target width (read from the container's clientWidth at
 // render time, defaulting to 1200). Item kinds match the event-model DSL
-// exactly (domainEvent, externalEvent, command, readModel, automation, ui)
-// and inherit the same colors and shapes.
+// (domainEvent, externalEvent, command, readModel, automation, ui) and
+// inherit the same colors and shapes; `error` is a sliceTests-only kind
+// rendered as a red box.
 
 // If `src` is a markdown document containing the DSL inside a fenced code
 // block, return just the block's body. Otherwise return src unchanged.
@@ -46,7 +49,7 @@ function extractFromMarkdown(src, keyword) {
 function parseSliceTests(src) {
   src = extractFromMarkdown(src, "sliceTests");
   const itemRe =
-    /^(domainEvent|externalEvent|command|readModel|automation|ui)\s*\["([^"]*)"\]\s*(\{)?\s*$/;
+    /^(domainEvent|externalEvent|command|readModel|automation|ui|error)\s*\["([^"]*)"\]\s*(\{)?\s*$/;
   const fieldRe = /^(\w+)\s*:\s*(\w+)$/;
   const testRe = /^test\s*\["([^"]*)"\]\s*$/;
   const lines = src.split(/\r?\n/);
@@ -254,6 +257,7 @@ const ITEM_STYLES = {
   readModel:     { fill: "#86efac", stroke: "#14532d", rx: 14 },
   automation:    { fill: "#ffffff", stroke: "#475569", rx: 4, dash: "4 2" },
   ui:            { fill: "#ffffff", stroke: "#475569", rx: 4 },
+  error:         { fill: "#f87171", stroke: "#7f1d1d", rx: 4 },
 };
 
 const ITEM_H_BASE_RENDER = 56;

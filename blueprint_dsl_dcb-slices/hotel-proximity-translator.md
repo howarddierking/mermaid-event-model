@@ -1,12 +1,25 @@
-# {{SLICE_TITLE}}
+# Hotel Proximity Translator
 
-<!-- slice id: {{SLICE_ID}} -->
+<!-- slice id: hotel_proximity_translator -->
 
 ## Model
 
 ```mermaid
 eventModel
-{{SLICE_MODEL_BODY}}
+	domainEvent positionUpdated["Position Updated"] {
+		guestId: UUID
+		latitude: float
+		longitude: float
+		timestamp: timestamp
+	}
+	command hotelProximityTranslator["Hotel Proximity Translator"] reads [checkedIn, checkedOut]
+	domainEvent guestLeft["Guest Left Hotel"] {
+		guestId: UUID
+		departedAt: timestamp
+	}
+	slice hotel_proximity_translator["Hotel Proximity Translator"]
+		positionUpdated-->hotelProximityTranslator
+		hotelProximityTranslator-->guestLeft
 ```
 
 ## Description
@@ -26,7 +39,5 @@ sliceTests
 			# for state-view tests that only project a read model.
 		then
 			# Expected outcomes: emitted events, populated read
-			# models, signals to external systems. For rejection
-			# scenarios use `error["<message>"]` — the message is
-			# read verbatim by code generation.
+			# models, signals to external systems.
 ```

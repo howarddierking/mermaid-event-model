@@ -1,0 +1,43 @@
+services:
+
+  axon-server:
+    image: axoniq/axonserver:2025.2.0
+    hostname: axon-server
+    ports:
+      - "8024:8024"   # Web UI / REST
+      - "8124:8124"   # gRPC clients
+    environment:
+      AXONIQ_AXONSERVER_HOSTNAME: axon-server
+      AXONIQ_AXONSERVER_STANDALONE_DCB: "true"
+      AXONIQ_AXONSERVER_DEVMODE_ENABLED: "true"
+    volumes:
+      - axon-data:/axonserver/data
+      - axon-events:/axonserver/events
+
+  aspire-dashboard:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
+    hostname: aspire-dashboard
+    ports:
+      - "18888:18888"   # Web UI
+      - "4317:18889"    # OTLP/gRPC  (host 4317 -> container 18889)
+      - "4318:18890"    # OTLP/HTTP  (host 4318 -> container 18890)
+    environment:
+      DASHBOARD__OTLP__AUTHMODE: Unsecured
+      DASHBOARD__FRONTEND__AUTHMODE: Unsecured
+
+  postgres:
+    image: postgres:17
+    hostname: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: hotel
+      POSTGRES_USER: hotel
+      POSTGRES_PASSWORD: hotel
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  axon-data:
+  axon-events:
+  postgres-data:

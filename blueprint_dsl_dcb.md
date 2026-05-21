@@ -25,8 +25,9 @@ eventModel
 		email: string
 		registeredAt: timestamp
 	}
-	reg_ui-->Register
-	Register-->Registered
+	slice register["Register"]
+		reg_ui-->Register
+		Register-->Registered
 
 	ui:Manager room_ui["Room Management"] {
 		roomNumber: int
@@ -54,10 +55,13 @@ eventModel
 		isAvailable: boolean
 		nextCheckIn: date
 	}
-	room_ui-->addRoom
-	addRoom-->ra
-	ra-->avail
-	avail-->booking_ui
+	slice add_room["Add Room"]
+		room_ui-->addRoom
+		addRoom-->ra
+
+	slice view_room_availability["View Room Availability"]
+		ra-->avail
+		avail-->booking_ui
 
 	ui:Guest booking_ui["Booking Screen"] {
 		roomId: UUID
@@ -79,8 +83,9 @@ eventModel
 		checkOut: date
 		bookedAt: timestamp
 	}
-	booking_ui-->bookRoom
-	bookRoom-->booked
+	slice book_room["Book Room"]
+		booking_ui-->bookRoom
+		bookRoom-->booked
 
 	readModel cleaning_schedule["Cleaning Schedule"] {
 		roomId: UUID
@@ -101,10 +106,13 @@ eventModel
 		roomId: UUID
 		readiedAt: timestamp
 	}
-	booked-->cleaning_schedule
-	cleaning_schedule-->maintenance_ui
-	maintenance_ui-->readyRoom
-	readyRoom-->ready
+	slice view_cleaning_schedule["View Cleaning Schedule"]
+		booked-->cleaning_schedule
+		cleaning_schedule-->maintenance_ui
+
+	slice ready_room["Ready Room"]
+		maintenance_ui-->readyRoom
+		readyRoom-->ready
 
 	ui:Guest checkin_ui["Check-in Screen"] {
 		bookingId: UUID
@@ -128,9 +136,9 @@ eventModel
 		checkedInAt: timestamp
 		isPresent: boolean
 	}
-	checkin_ui-->checkin
-	checkin-->checkedIn
-	checkedIn-->guestRoster
+	slice check_in["Check-in"]
+		checkin_ui-->checkin
+		checkin-->checkedIn
 
 	domainEvent positionUpdated["Position Updated"] {
 		guestId: UUID
@@ -143,9 +151,9 @@ eventModel
 		guestId: UUID
 		departedAt: timestamp
 	}
-	positionUpdated-->hotelProximityTranslator
-	hotelProximityTranslator-->guestLeft
-	guestLeft-->guestRoster
+	slice hotel_proximity_translator["Hotel Proximity Translator"]
+		positionUpdated-->hotelProximityTranslator
+		hotelProximityTranslator-->guestLeft
 
 	automation:Manager checkOutAutomation["Check-out Automation"]
 	command checkOut["Checked Out"] reads [checkedIn, checkedOut] {
@@ -159,9 +167,12 @@ eventModel
 		roomId: UUID
 		checkedOutAt: timestamp
 	}
-	guestRoster-->checkOutAutomation
-	checkOutAutomation-->checkOut
-	checkOut-->checkedOut
+	slice check_out_automation["Check-out Automation"]
+		checkedIn-->guestRoster
+		guestLeft-->guestRoster
+		guestRoster-->checkOutAutomation
+		checkOutAutomation-->checkOut
+		checkOut-->checkedOut
 
 	ui:Guest payment_ui["Payment UI"] {
 		bookingId: UUID
@@ -191,9 +202,9 @@ eventModel
 		paymentMethod: string
 		status: string
 	}
-	payment_ui-->pay
-	pay-->paymentRequested
-	paymentRequested-->paymentsToProcess
+	slice request_payment["Request Payment"]
+		payment_ui-->pay
+		pay-->paymentRequested
 
 	automation:Guest paymentProcessor["Payment Processor"]
 	externalEvent gatewayConfirmed["Gateway Confirmed"] {
@@ -212,11 +223,13 @@ eventModel
 		transactionRef: string
 		succeededAt: timestamp
 	}
-	paymentsToProcess-->paymentProcessor
-	paymentProcessor-->processPayment
-	gatewayConfirmed-->processPayment
-	processPayment-->paymentSucceeded
-	paymentSucceeded-->paymentsToProcess
+	slice payment_processor["Payment Processor"]
+		paymentRequested-->paymentsToProcess
+		paymentSucceeded-->paymentsToProcess
+		paymentsToProcess-->paymentProcessor
+		paymentProcessor-->processPayment
+		gatewayConfirmed-->processPayment
+		processPayment-->paymentSucceeded
 
 	readModel salesReport["Sales Report"] {
 		totalRevenue: decimal
@@ -230,6 +243,7 @@ eventModel
 		averageBookingValue: decimal
 		revenueByRoomType: string
 	}
-	paymentSucceeded-->salesReport
-	salesReport-->sales_ui
+	slice view_sales_report["View Sales Report"]
+		paymentSucceeded-->salesReport
+		salesReport-->sales_ui
 ```

@@ -1,12 +1,28 @@
-# {{SLICE_TITLE}}
+# Ready Room
 
-<!-- slice id: {{SLICE_ID}} -->
+<!-- slice id: ready_room -->
 
 ## Model
 
 ```mermaid
 eventModel
-{{SLICE_MODEL_BODY}}
+	actor Manager
+	ui:Manager maintenance_ui["Maintenance UI"] {
+		roomId: UUID
+		roomNumber: int
+		cleaningStatus: string
+	}
+	command readyRoom["Ready Room"] reads [ra, checkedOut, ready] {
+		roomId: UUID
+		cleanedBy: string
+	}
+	domainEvent ready["Room Readied"] {
+		roomId: UUID
+		readiedAt: timestamp
+	}
+	slice ready_room["Ready Room"]
+		maintenance_ui-->readyRoom
+		readyRoom-->ready
 ```
 
 ## Description
@@ -26,7 +42,5 @@ sliceTests
 			# for state-view tests that only project a read model.
 		then
 			# Expected outcomes: emitted events, populated read
-			# models, signals to external systems. For rejection
-			# scenarios use `error["<message>"]` — the message is
-			# read verbatim by code generation.
+			# models, signals to external systems.
 ```

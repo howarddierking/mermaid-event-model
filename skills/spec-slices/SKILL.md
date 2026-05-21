@@ -87,7 +87,7 @@ If absent:
 
 - **Don't modify the DSL file.** This skill is read-only with respect to the input; it only writes spec files in the sibling directory.
 - **The Model section IS authored** (it's mechanically derived from the parent eventModel and is meant to be a faithful clip of the slice's portion). The Description and Tests sections, on the other hand, should remain as placeholder prompts — the user fills those in. Don't invent prose or tests.
-- **The Tests section uses the `sliceTests` DSL** inside a `mermaid` fenced block, so it renders as a Given / When / Then test card in the model viewer alongside the slice's Model section. The template ships with a single `test["…"]` skeleton; the user fills in the actual preconditions, action, and outcomes. See the README's "Slice Tests" section for the grammar.
+- **The Tests section uses the `sliceTests` DSL** inside a `mermaid` fenced block, so it renders as a Given / When / Then test card in the model viewer alongside the slice's Model section. The template ships with a single `test["…"]` skeleton; the user fills in the actual preconditions, action, and outcomes. See the README's "Slice Tests" section for the grammar — in particular note that `then` may contain `error["<message>"]` entries for rejection scenarios, and that the message string is read verbatim by downstream code generation.
 - If the DSL file has zero slice declarations, report that and skip creating the directory.
 
 ## Re-running the skill

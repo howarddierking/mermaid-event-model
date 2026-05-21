@@ -176,7 +176,7 @@ The renderer draws a dashed bounding box around the member nodes with the slice'
 
 ## Slice Tests
 
-The companion `sliceTests` diagram type expresses test specifications for a vertical slice in **Given / When / Then** form. The element kinds (`domainEvent`, `externalEvent`, `command`, `readModel`, `automation`, `ui`) and visual styling match the `eventModel` diagram, so the visual vocabulary is the same on both sides.
+The companion `sliceTests` diagram type expresses test specifications for a vertical slice in **Given / When / Then** form. The element kinds (`domainEvent`, `externalEvent`, `command`, `readModel`, `automation`, `ui`) and visual styling match the `eventModel` diagram, so the visual vocabulary is the same on both sides. One additional kind, `error["<message>"]`, is sliceTests-only — see [Expressing errors](#expressing-errors) below.
 
 ```
 sliceTests
@@ -194,6 +194,22 @@ sliceTests
 Each `test` becomes a self-contained card with `Given` / `When` / `Then` row labels on the left and items stacked horizontally to the right. Items can carry the same brace-delimited typed-field data sections as `eventModel` items. Tests grid-pack into rows that fill the container width, wrapping when the next card would overflow.
 
 Four canonical patterns (state change, state view, external state input, external state output) live in [`blueprint_sliceTests.md`](blueprint_sliceTests.md).
+
+### Expressing errors
+
+A `then` block can list an `error["<message>"]` to assert that the command (or signal) under test must be rejected with that exact message. It is a sliceTests-only kind — it does not appear in `eventModel` diagrams.
+
+```
+test["Reject duplicate room number"]
+    given
+        domainEvent["Room Added"] { roomId: UUID }
+    when
+        command["Add Room"] { roomNumber: int }
+    then
+        error["Room with roomNumber already exists"]
+```
+
+Errors render as red boxes (`#f87171` fill, `#7f1d1d` stroke), distinct from any other kind so a glance tells you "this test asserts a rejection." Downstream code generation reads the message verbatim: each `error[...]` maps to throwing the target framework's domain exception (in the Java reference app under [`reference-app/axon5-java/`](reference-app/axon5-java/), `HotelModelException`) with the message used unchanged, so the test's `.exception(type, message)` assertion stays a one-line mapping from the DSL.
 
 ### Authoring tests in slice spec files
 

@@ -1,12 +1,31 @@
-# {{SLICE_TITLE}}
+# Register
 
-<!-- slice id: {{SLICE_ID}} -->
+<!-- slice id: register -->
 
 ## Model
 
 ```mermaid
 eventModel
-{{SLICE_MODEL_BODY}}
+	actor Guest
+	ui:Guest reg_ui["Registration UI"] {
+		name: string
+		email: string
+		password: string
+	}
+	command Register reads [Registered] {
+		name: string
+		email: string
+		password: string
+	}
+	domainEvent Registered {
+		guestId: UUID
+		name: string
+		email: string
+		registeredAt: timestamp
+	}
+	slice register["Register"]
+		reg_ui-->Register
+		Register-->Registered
 ```
 
 ## Description
@@ -26,7 +45,5 @@ sliceTests
 			# for state-view tests that only project a read model.
 		then
 			# Expected outcomes: emitted events, populated read
-			# models, signals to external systems. For rejection
-			# scenarios use `error["<message>"]` — the message is
-			# read verbatim by code generation.
+			# models, signals to external systems.
 ```

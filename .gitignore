@@ -19,3 +19,10 @@ yarn.lock
 # Logs / local scratch
 *.log
 .tmp/
+
+# Java / Maven / Quarkus build output
+target/
+.quarkus/
+
+# Vite build output
+dist/

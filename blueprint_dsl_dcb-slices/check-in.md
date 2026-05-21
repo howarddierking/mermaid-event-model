@@ -1,12 +1,30 @@
-# {{SLICE_TITLE}}
+# Check-in
 
-<!-- slice id: {{SLICE_ID}} -->
+<!-- slice id: check_in -->
 
 ## Model
 
 ```mermaid
 eventModel
-{{SLICE_MODEL_BODY}}
+	actor Guest
+	ui:Guest checkin_ui["Check-in Screen"] {
+		bookingId: UUID
+		guestName: string
+		roomNumber: int
+	}
+	command checkin["Check-in"] reads [booked, checkedIn] {
+		bookingId: UUID
+		guestId: UUID
+	}
+	domainEvent checkedIn["Checked In"] {
+		bookingId: UUID
+		guestId: UUID
+		roomId: UUID
+		checkedInAt: timestamp
+	}
+	slice check_in["Check-in"]
+		checkin_ui-->checkin
+		checkin-->checkedIn
 ```
 
 ## Description
@@ -26,7 +44,5 @@ sliceTests
 			# for state-view tests that only project a read model.
 		then
 			# Expected outcomes: emitted events, populated read
-			# models, signals to external systems. For rejection
-			# scenarios use `error["<message>"]` — the message is
-			# read verbatim by code generation.
+			# models, signals to external systems.
 ```
