@@ -9,7 +9,10 @@ import * as d3 from "d3";
 //               domainEvent["<Label>"]
 //               domainEvent["<Label>"] {
 //                   field1: type
-//                   field2: type
+//                   field2: type = <example>   (sliceTests-only: an example
+//                                                value that makes the test
+//                                                case concrete and feeds code
+//                                                generation as a fixture)
 //               }
 //               readModel["<Label>"]
 //               ...
@@ -24,7 +27,10 @@ import * as d3 from "d3";
 // Each test renders as a self-contained card with its own Given / When / Then
 // row labels on the left and items stacked horizontally to the right. Items
 // can carry an optional brace-delimited data section listing typed fields,
-// using the same syntax as the eventModel chart type. Tests grid-pack into
+// using the same syntax as the eventModel chart type, with one sliceTests-only
+// extension: a field may carry an example value (`name: type = value`), which
+// renders value-forward (`name = value`) and demonstrates the concrete case.
+// Tests grid-pack into
 // rows that fill the target width (read from the container's clientWidth at
 // render time, defaulting to 1200). Item kinds match the event-model DSL
 // (domainEvent, externalEvent, command, readModel, automation, ui) and
@@ -50,7 +56,10 @@ function parseSliceTests(src) {
   src = extractFromMarkdown(src, "sliceTests");
   const itemRe =
     /^(domainEvent|externalEvent|command|readModel|automation|ui|error)\s*\["([^"]*)"\]\s*(\{)?\s*$/;
-  const fieldRe = /^(\w+)\s*:\s*(\w+)$/;
+  // name: type            (type only, as in eventModel)
+  // name: type = value     (sliceTests-only example value; value is the raw
+  //                         text after `=`, e.g. 101, "a1b2", 2026-08-10, true)
+  const fieldRe = /^(\w+)\s*:\s*(\w+)\s*(?:=\s*(.+?))?\s*$/;
   const testRe = /^test\s*\["([^"]*)"\]\s*$/;
   const lines = src.split(/\r?\n/);
   const indentOf = (raw) => raw.match(/^[\t ]*/)[0].length;
@@ -89,7 +98,7 @@ function parseSliceTests(src) {
               i++;
               if (fl === "}") break;
               const fm = fl.match(fieldRe);
-              if (fm) fields.push({ name: fm[1], type: fm[2] });
+              if (fm) fields.push({ name: fm[1], type: fm[2], value: fm[3] });
             }
           }
           test[section].push({ kind, label, fields });
@@ -104,6 +113,16 @@ function parseSliceTests(src) {
     i++;
   }
   return { tests };
+}
+
+// The text shown for a data-section field. Value-forward: when an example
+// value is present, show `name = value` (concrete, demonstrates the case);
+// otherwise fall back to `name: type` (the abstract shape). Used by both the
+// width sizing in layout and the drawing pass so they never diverge.
+function fieldLabel(f) {
+  return f.value != null && f.value !== ""
+    ? `${f.name} = ${f.value}`
+    : `${f.name}: ${f.type}`;
 }
 
 function layoutSliceTests(model, options = {}) {
@@ -147,7 +166,7 @@ function layoutSliceTests(model, options = {}) {
       if (w > itemW) itemW = w;
       if (it.fields && it.fields.length > 0) {
         for (const f of it.fields) {
-          const fw = (f.name.length + 2 + f.type.length) * FIELD_CHAR_W + FIELD_PAD;
+          const fw = fieldLabel(f).length * FIELD_CHAR_W + FIELD_PAD;
           if (fw > itemW) itemW = fw;
         }
       }
@@ -428,7 +447,7 @@ function drawItem(g, item) {
       .attr("y", item.y + ITEM_H_BASE_RENDER + 4 + (i + 1) * FIELD_LINE_H_RENDER - 3)
       .attr("fill", "#374151")
       .attr("font-size", 10)
-      .text(`${f.name}: ${f.type}`);
+      .text(fieldLabel(f));
   });
 }
 

@@ -68,6 +68,15 @@ Each test is one Given / When / Then card. Items inside reuse the
   generated, each `error[...]` maps to throwing the target framework's
   domain exception with the exact message string used verbatim.
 
+Data-section fields support one **sliceTests-only** extension over `eventModel`:
+an optional example value, `field: type = value` (e.g. `checkIn: date =
+2026-08-12`). It renders value-forward — `field = value` when an example is
+present, `field: type` otherwise — makes each test case concrete, and feeds
+code generation as a fixture. The value is the raw text after `=`; it's
+optional, so type-only fields still parse. `error[...]` is the only construct
+truly exclusive to sliceTests; example values are a superset of the shared
+data-section syntax.
+
 `then` may contain a mix of emitted events, read-model states, and errors.
 
 ## Conventions

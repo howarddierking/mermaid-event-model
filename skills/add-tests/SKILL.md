@@ -204,6 +204,31 @@ whole data sections by default. Instead:
 Copy each included field's declared **type** from the model verbatim
 (`bookedAt: timestamp`, not a guessed type).
 
+### 3a. Give each included field a concrete example value
+
+Data-section fields support a sliceTests-only extension: `field: type = value`,
+which renders value-forward (`field = value`) and doubles as a code-generation
+fixture. **Author an example value for every field you include** — this is what
+makes a test demonstrate its case rather than merely restate the schema.
+
+- Choose values that actually *exercise the behavior the test asserts*. The
+  example values are the demonstration: for an overlap-rejection test, the given
+  booking's `checkIn`/`checkOut` must literally overlap the command's requested
+  dates; for the "allowed because previously checked out" variant, the
+  `checkedOutAt` must fall before the requested check-in. If the numbers don't
+  make the outcome true, the test is lying.
+- Keep values **consistent across a test's given/when/then** so the reader can
+  trace one scenario: reuse the same `roomId = "room-101"` in the given event,
+  the command, and the emitted event; tie a `Checked Out` back to its booking by
+  repeating the `bookingId`.
+- Match the value to the declared type: quote strings/ids (`"room-101"`), write
+  dates/timestamps as ISO literals (`2026-08-12`, `2026-08-11T09:30:00Z`),
+  numbers and booleans bare (`4`, `true`).
+- Prefer short, readable ids over raw UUIDs (`"bk-001"`, not a 36-char hex) —
+  they read better in the card and still map cleanly to generated fixtures.
+- If a field genuinely has no meaningful example for the case (rare), leave it
+  type-only; it will render `field: type`.
+
 ### 4. Author the rejection message (verbatim)
 
 For a **Rejection** test, the `error["<message>"]` string is read **verbatim by
@@ -265,6 +290,9 @@ Intent: *"books a room for a registered guest and stamps the booking time."*
 - Field subset: keep `guestId`/`roomId` keys to tie the scenario together and
   `bookedAt` because the intent asks for it; omit `name`, `email`, `roomNumber`,
   `roomType`, `checkIn`, `checkOut` — the test doesn't speak to them.
+- Example values: reuse `guestId = "g-001"` and `roomId = "room-101"` across the
+  given, command, and outcome so the scenario traces as one; give `bookedAt` a
+  concrete timestamp.
 
 Appended:
 
@@ -272,22 +300,22 @@ Appended:
 	test["Books a room for a registered guest and stamps the booking time"]
 		given
 			domainEvent["Registered"] {
-				guestId: UUID
+				guestId: UUID = "g-001"
 			}
 			domainEvent["Room Added"] {
-				roomId: UUID
+				roomId: UUID = "room-101"
 			}
 		when
 			command["Book Room"] {
-				guestId: UUID
-				roomId: UUID
+				guestId: UUID = "g-001"
+				roomId: UUID = "room-101"
 			}
 		then
 			domainEvent["Room Booked"] {
-				bookingId: UUID
-				guestId: UUID
-				roomId: UUID
-				bookedAt: timestamp
+				bookingId: UUID = "bk-001"
+				guestId: UUID = "g-001"
+				roomId: UUID = "room-101"
+				bookedAt: timestamp = 2026-08-12T14:00:00Z
 			}
 ```
 

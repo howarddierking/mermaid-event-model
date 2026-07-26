@@ -43,26 +43,26 @@ sliceTests
 	test["Books a room and emits Room Booked for the specified room"]
 		when
 			command["Book Room"] {
-				roomId: UUID
+				roomId: UUID = "room-101"
 			}
 		then
 			domainEvent["Room Booked"] {
-				bookingId: UUID
-				roomId: UUID
+				bookingId: UUID = "bk-001"
+				roomId: UUID = "room-101"
 			}
 
 	test["Rejects booking when an existing booking overlaps the dates"]
 		given
 			domainEvent["Room Booked"] {
-				roomId: UUID
-				checkIn: date
-				checkOut: date
+				roomId: UUID = "room-101"
+				checkIn: date = 2026-08-10
+				checkOut: date = 2026-08-14
 			}
 		when
 			command["Book Room"] {
-				roomId: UUID
-				checkIn: date
-				checkOut: date
+				roomId: UUID = "room-101"
+				checkIn: date = 2026-08-12
+				checkOut: date = 2026-08-16
 			}
 		then
 			error["Room is not available for the requested dates"]
@@ -70,25 +70,25 @@ sliceTests
 	test["Allows booking when the overlapping booking was already checked out"]
 		given
 			domainEvent["Room Booked"] {
-				bookingId: UUID
-				roomId: UUID
-				checkIn: date
-				checkOut: date
+				bookingId: UUID = "bk-001"
+				roomId: UUID = "room-101"
+				checkIn: date = 2026-08-10
+				checkOut: date = 2026-08-14
 			}
 			domainEvent["Checked Out"] {
-				bookingId: UUID
-				roomId: UUID
-				checkedOutAt: timestamp
+				bookingId: UUID = "bk-001"
+				roomId: UUID = "room-101"
+				checkedOutAt: timestamp = 2026-08-11T09:30:00Z
 			}
 		when
 			command["Book Room"] {
-				roomId: UUID
-				checkIn: date
-				checkOut: date
+				roomId: UUID = "room-101"
+				checkIn: date = 2026-08-12
+				checkOut: date = 2026-08-16
 			}
 		then
 			domainEvent["Room Booked"] {
-				bookingId: UUID
-				roomId: UUID
+				bookingId: UUID = "bk-002"
+				roomId: UUID = "room-101"
 			}
 ```

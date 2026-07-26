@@ -29,4 +29,6 @@ sliceTests
 			# models, signals to external systems. For rejection
 			# scenarios use `error["<message>"]` — the message is
 			# read verbatim by code generation.
+	# Data-section fields may carry example values to demonstrate the
+	# case and seed code-gen fixtures, e.g. { checkIn: date = 2026-08-12 }.
 ```

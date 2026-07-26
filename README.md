@@ -182,16 +182,16 @@ The companion `sliceTests` diagram type expresses test specifications for a vert
 sliceTests
     test["<Title>"]
         given
-            <kind>["<Label>"] [{ field: type ... }]
+            <kind>["<Label>"] [{ field: type [= example] ... }]
             ...
         when                           (optional — omit for state-view tests)
-            <kind>["<Label>"] [{ field: type ... }]
+            <kind>["<Label>"] [{ field: type [= example] ... }]
         then
-            <kind>["<Label>"] [{ field: type ... }]
+            <kind>["<Label>"] [{ field: type [= example] ... }]
             ...
 ```
 
-Each `test` becomes a self-contained card with `Given` / `When` / `Then` row labels on the left and items stacked horizontally to the right. Items can carry the same brace-delimited typed-field data sections as `eventModel` items. Tests grid-pack into rows that fill the container width, wrapping when the next card would overflow.
+Each `test` becomes a self-contained card with `Given` / `When` / `Then` row labels on the left and items stacked horizontally to the right. Items can carry the same brace-delimited typed-field data sections as `eventModel` items, with one `sliceTests`-only extension: a field may carry an **example value** (`field: type = value`). Example values make the test case concrete — you can see that the given dates overlap the requested ones, for instance — and they double as fixtures for code generation. They render **value-forward**: a field with an example shows `field = value`, while a field without one falls back to `field: type`. The value is the raw text after `=` (`101`, `"room-101"`, `2026-08-10`, `true`); it's optional, so existing type-only data sections are unaffected. Tests grid-pack into rows that fill the container width, wrapping when the next card would overflow.
 
 Four canonical patterns (state change, state view, external state input, external state output) live in [`blueprint_sliceTests.md`](blueprint_sliceTests.md).
 
