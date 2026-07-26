@@ -115,6 +115,9 @@ function layoutSliceTests(model, options = {}) {
   const ITEM_GAP      = 10;
   const ROW_LABEL_W   = 64;
   const TEST_TITLE_H  = 32;
+  const TITLE_CHAR_W  = 8;   // approx px per char at 16px/600 (title font)
+  const TITLE_LINE_H  = 20;
+  const TITLE_MAX_W   = 260; // cap on how wide a long title alone widens a card
   const TEST_PAD      = 16;
   const ROW_PAD       = 10;
   const TEST_GAP      = 24;
@@ -161,8 +164,18 @@ function layoutSliceTests(model, options = {}) {
 
     const maxItems = Math.max(t.given.length, t.when.length, t.then.length, 1);
     const cellW = maxItems * itemW + (maxItems - 1) * ITEM_GAP;
-    const w = TEST_PAD * 2 + ROW_LABEL_W + cellW;
-    const h = TEST_PAD * 2 + TEST_TITLE_H + givenRowH + whenRowH + thenRowH;
+    const contentW = TEST_PAD * 2 + ROW_LABEL_W + cellW;
+
+    // The card must also be wide enough for its title. Let a long title widen
+    // the card up to TITLE_MAX_W, then wrap the remainder onto extra lines so
+    // it stays inside the card instead of overflowing into neighboring tests.
+    const titleFullW = (t.title || "").length * TITLE_CHAR_W + TEST_PAD * 2;
+    const w = Math.max(contentW, Math.min(titleFullW, TITLE_MAX_W));
+    const titleMaxChars = Math.max(6, Math.floor((w - TEST_PAD * 2) / TITLE_CHAR_W));
+    const titleLines = wrapLabel(t.title, titleMaxChars);
+    const titleH = Math.max(TEST_TITLE_H, titleLines.length * TITLE_LINE_H + 8);
+
+    const h = TEST_PAD * 2 + titleH + givenRowH + whenRowH + thenRowH;
 
     return {
       ...t,
@@ -171,6 +184,8 @@ function layoutSliceTests(model, options = {}) {
       cellW,
       w,
       h,
+      titleLines,
+      titleH,
       rowHs: { given: givenRowH, when: whenRowH, then: thenRowH },
     };
   });
@@ -215,7 +230,7 @@ function layoutSliceTests(model, options = {}) {
   // Compute internal positions for each test now that x,y are set.
   for (const t of tests) {
     const titleY = t.y + TEST_PAD;
-    const givenY = titleY + TEST_TITLE_H;
+    const givenY = titleY + t.titleH;
     const whenY  = givenY + t.rowHs.given;
     const thenY  = whenY  + t.rowHs.when;
     const cellX  = t.x + TEST_PAD + ROW_LABEL_W;
@@ -262,6 +277,7 @@ const ITEM_STYLES = {
 
 const ITEM_H_BASE_RENDER = 56;
 const FIELD_LINE_H_RENDER = 16;
+const TITLE_LINE_H_RENDER = 20; // must match TITLE_LINE_H in layoutSliceTests
 
 export function renderSliceTests(src, target) {
   const model = parseSliceTests(src);
@@ -306,16 +322,25 @@ export function drawInto(svg, model, L) {
       .attr("stroke", "#e5e7eb")
       .attr("stroke-width", 1);
 
-    // Test title (centered above the row labels and item cells).
+    // Test title (centered above the row labels and item cells). Wrapped to
+    // the card width in layout, so render each line and center the block
+    // vertically within the reserved title band.
+    const titleLines = t.titleLines && t.titleLines.length ? t.titleLines : [t.title];
+    const titleBlockY =
+      t.titleY + t.titleH / 2 - ((titleLines.length - 1) * TITLE_LINE_H_RENDER) / 2;
     gTest
       .append("text")
-      .attr("x", t.x + t.w / 2)
-      .attr("y", t.titleY + 22)
       .attr("text-anchor", "middle")
       .attr("font-size", 16)
       .attr("font-weight", 600)
       .attr("fill", "#0f172a")
-      .text(t.title);
+      .selectAll("tspan")
+      .data(titleLines)
+      .join("tspan")
+        .attr("x", t.x + t.w / 2)
+        .attr("y", (_, i) => titleBlockY + i * TITLE_LINE_H_RENDER)
+        .attr("dominant-baseline", "middle")
+        .text((d) => d);
 
     // Row labels: each test owns its Given / When / Then labels.
     const rowLabels = [
