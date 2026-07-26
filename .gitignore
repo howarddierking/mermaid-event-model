@@ -26,3 +26,4 @@ target/
 
 # Vite build output
 dist/
+.gstack/
