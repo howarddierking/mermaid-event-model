@@ -99,10 +99,23 @@ Read the chosen spec file and parse the `eventModel` snippet inside its
 - **fields**: the brace-delimited `{ name: type ... }` data section, verbatim.
 - the slice's **edges**, so you know the flow direction.
 
-This inventory is the *only* source of truth for element labels and field
-names in the generated tests. `command reads [...]` clauses are a DCB hydration
-directive — never a flow edge — so they do not participate here; ignore them
-when reasoning about given/when/then structure.
+This inventory is the source of truth for element labels and field names in the
+generated tests.
+
+**Include the command's `reads [...]` events as valid `given` preconditions.**
+A `command reads [...]` clause is a DCB consistency directive — never a flow
+edge, so it does not add nodes to the slice diagram or draw arrows (see the
+`add-slices` and `spec-slices` skills, which correctly ignore it for layout).
+But the events a command reads *are* precisely its consistency boundary: the
+prior history it examines to accept or reject. That makes each `reads` event a
+legitimate `given` for this slice's tests. The event's declaration (label +
+fields) usually lives in the **parent** model rather than the slice's Model
+snippet — the snippet shows the ids in the `reads [...]` tag but not the full
+event bodies — so resolve any `reads`-only event by looking it up in the parent
+DSL file (`<model>.md`) by id, and use that declaration to ground it. An event
+that is reachable by a slice edge (e.g. the slice's own output event) is
+groundable directly from the snippet as before; `reads` only *adds* to the
+given-inventory, it never removes anything.
 
 ## The five flow types
 

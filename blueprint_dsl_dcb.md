@@ -69,7 +69,7 @@ eventModel
 		checkIn: date
 		checkOut: date
 	}
-	command bookRoom["Book Room"] reads [Registered, ra, booked] {
+	command bookRoom["Book Room"] reads [Registered, ra, booked, checkedOut] {
 		guestId: UUID
 		roomId: UUID
 		checkIn: date

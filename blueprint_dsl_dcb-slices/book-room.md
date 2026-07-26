@@ -13,7 +13,7 @@ eventModel
 		checkIn: date
 		checkOut: date
 	}
-	command bookRoom["Book Room"] reads [Registered, ra, booked] {
+	command bookRoom["Book Room"] reads [Registered, ra, booked, checkedOut] {
 		guestId: UUID
 		roomId: UUID
 		checkIn: date
@@ -40,14 +40,55 @@ _Describe the high-level intent of this slice in prose. What user-visible capabi
 
 ```mermaid
 sliceTests
-	test["Describe what this test verifies"]
-		given
-			# Preconditions: events that have already occurred,
-			# read models that must be present.
+	test["Books a room and emits Room Booked for the specified room"]
 		when
-			# The command (or signal) under test. Omit `when`
-			# for state-view tests that only project a read model.
+			command["Book Room"] {
+				roomId: UUID
+			}
 		then
-			# Expected outcomes: emitted events, populated read
-			# models, signals to external systems.
+			domainEvent["Room Booked"] {
+				bookingId: UUID
+				roomId: UUID
+			}
+
+	test["Rejects booking when an existing booking overlaps the dates"]
+		given
+			domainEvent["Room Booked"] {
+				roomId: UUID
+				checkIn: date
+				checkOut: date
+			}
+		when
+			command["Book Room"] {
+				roomId: UUID
+				checkIn: date
+				checkOut: date
+			}
+		then
+			error["Room is not available for the requested dates"]
+
+	test["Allows booking when the overlapping booking was already checked out"]
+		given
+			domainEvent["Room Booked"] {
+				bookingId: UUID
+				roomId: UUID
+				checkIn: date
+				checkOut: date
+			}
+			domainEvent["Checked Out"] {
+				bookingId: UUID
+				roomId: UUID
+				checkedOutAt: timestamp
+			}
+		when
+			command["Book Room"] {
+				roomId: UUID
+				checkIn: date
+				checkOut: date
+			}
+		then
+			domainEvent["Room Booked"] {
+				bookingId: UUID
+				roomId: UUID
+			}
 ```
