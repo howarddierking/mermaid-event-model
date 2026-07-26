@@ -29,8 +29,7 @@ specs for a single slice, sharing the visual vocabulary of `eventModel`).
 | `blueprint_dsl_fanin.md` | Fan-in stress test (16 events → one read model). |
 | `blueprint_sliceTests.md` | Canonical `sliceTests` reference (four patterns). |
 | `<model>-slices/` | Per-slice spec markdown, produced by the `spec-slices` skill. |
-| `skills/` | Claude Code skills: `event-model`, `add-slices`, `spec-slices`, `validate-completeness`, `create-event-model`. Also installable as a plugin (`.claude-plugin/plugin.json`). |
-| `reference-app/axon5-java/` | Working end-to-end Java implementation of the `add_room` slice from `blueprint_dsl_dcb.md`. Ground truth for the upcoming code-generation skill. See its own README. |
+| `skills/` | Claude Code skills: `event-model`, `add-slices`, `spec-slices`, `add-tests`, `validate-completeness`, `create-event-model`. Also installable as a plugin (`.claude-plugin/plugin.json`). |
 
 ## DSL kinds (eventModel)
 
@@ -67,8 +66,7 @@ Each test is one Given / When / Then card. Items inside reuse the
   inside a `then` block. Renders as a red box (`#f87171` fill / `#7f1d1d`
   stroke, matching the 400/900 palette pattern). When the slice is code-
   generated, each `error[...]` maps to throwing the target framework's
-  domain exception (in the Java reference app, `HotelModelException`) with
-  the exact message string used verbatim.
+  domain exception with the exact message string used verbatim.
 
 `then` may contain a mix of emitted events, read-model states, and errors.
 
@@ -93,10 +91,6 @@ Each test is one Given / When / Then card. Items inside reuse the
 - **JS tests don't exist.** When changing parser regexes or layout, sanity-
   check via a quick Node one-liner against the regex or by opening the
   viewer against the relevant `blueprint_*.md`.
-- **Java reference app** (`reference-app/axon5-java/`) is a real Maven
-  multi-module build with its own README. It includes a Maven Wrapper
-  (`./mvnw`) so it builds on a clean machine without installing Maven.
-  Pinned to Axon 5.0.0, Quarkus 3.35.4, Java 25.
 
 ## Notes for skill changes
 

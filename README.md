@@ -209,7 +209,7 @@ test["Reject duplicate room number"]
         error["Room with roomNumber already exists"]
 ```
 
-Errors render as red boxes (`#f87171` fill, `#7f1d1d` stroke), distinct from any other kind so a glance tells you "this test asserts a rejection." Downstream code generation reads the message verbatim: each `error[...]` maps to throwing the target framework's domain exception (in the Java reference app under [`reference-app/axon5-java/`](reference-app/axon5-java/), `HotelModelException`) with the message used unchanged, so the test's `.exception(type, message)` assertion stays a one-line mapping from the DSL.
+Errors render as red boxes (`#f87171` fill, `#7f1d1d` stroke), distinct from any other kind so a glance tells you "this test asserts a rejection." Downstream code generation reads the message verbatim: each `error[...]` maps to throwing the target framework's domain exception with the message used unchanged, so the test's rejection assertion stays a one-line mapping from the DSL.
 
 ### Authoring tests in slice spec files
 
@@ -218,6 +218,8 @@ The [`spec-slices` skill](#claude-code-plugin) stamps out one markdown spec file
 - `## Model` — a `mermaid` fenced `eventModel` snippet of just this slice's elements + edges, mechanically derived from the parent model. Re-running the skill refreshes this section automatically as the parent model evolves.
 - `## Description` — your prose. Describe the slice's user-visible capability, why it matters, and what invariant it preserves. Edit freely; the skill never overwrites it.
 - `## Tests` — your test specifications, authored in the `sliceTests` DSL inside a `mermaid` fenced block. This section is also user-owned; edit freely.
+
+You can author these tests by hand, or drive them with the [`add-tests` skill](#claude-code-plugin): describe the behavior in natural language ("books a room for a registered guest", "rejects a duplicate room number") and the skill infers the flow type, grounds every element and field against the slice's Model snippet, includes only the field subset your description exercises, and appends the result to `## Tests` without touching existing tests. If your description references an attribute the slice's model doesn't carry, it's raised back to you as a completeness gap rather than invented.
 
 Inside `## Tests`, write one or more `test[...]` declarations that exercise the slice. Each test should:
 
@@ -315,6 +317,7 @@ Install it in any project where you're authoring Event Models:
 | `/mermaid-event-model:event-model` | Authors or extends a DSL file from a natural-language description. Adds actors, aggregates, UIs, commands, events, read models, and automations using the project's grammar and conventions. Resolves the target file from the argument or, if absent, the most recently referenced file in the conversation. |
 | `/mermaid-event-model:add-slices` | Analyzes data flow in a DSL file and proposes vertical slice groupings. Identifies command slices (ui → command → event) and read slices (event → readModel → ui/automation), presents them for review, then applies them. |
 | `/mermaid-event-model:spec-slices` | Stamps out one markdown specification file per `slice` declared in the DSL into a sibling directory `<dsl-file>-slices/`. Each spec has a Model section (auto-extracted snippet, refreshed on re-run), a Description (prose intent), and a Tests section authored in the [`sliceTests` DSL](#slice-tests). Description and Tests are user-owned and preserved across re-runs. Intended to drive both validation and code generation downstream. |
+| `/mermaid-event-model:add-tests` | Authors `sliceTests` Given/When/Then tests for a slice from a natural-language intent and appends them to that slice's spec file. Infers the target slice from the test's action element (its command, or read model for a view test) so you rarely name it, and infers the flow type (state change, rejection, state view, external input/output) from the slice shape, includes only the field subset the test's language exercises, and — like `validate-completeness` — refuses to invent data: any attribute you reference that the slice's model doesn't carry is raised back to you before anything is written. Existing tests, Description, and Model round-trip unchanged. |
 | `/mermaid-event-model:validate-completeness` | Checks the [information completeness principle](https://www.pradhan.is/blogs/event-modelling-best-practices) — traces every field in every UI and read model backward through events and commands to verify no data is assumed or missing. Reports gaps with suggested fixes. |
 | `/mermaid-event-model:create-event-model` | Seeds a project with a working Event Model: writes a markdown file (DSL inside a fenced `mermaid` block, defaults to `blueprint_dsl.md`) plus a sibling `model-viewer.html` page that renders it and lists any companion slice specs. Useful for bootstrapping a new model or resetting to the reference example. |
 
