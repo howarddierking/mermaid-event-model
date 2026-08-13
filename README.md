@@ -4,6 +4,8 @@ A small DSL and SVG renderer for [Event Modeling](https://eventmodeling.org) dia
 
 ![reference blueprint](blueprint_model_only.jpeg)
 
+**[Try the live demo →](https://howarddierking.github.io/mermaid-event-model/)** — browse the example models with their slice specs, or edit the DSL in the playground, right in your browser.
+
 ## Installation
 
 ### As an npm package
@@ -68,6 +70,8 @@ The package is mirrored on jsDelivr. Pair it with an importmap so the bare `d3` 
 
 ## Running the examples
 
+The demo pages are published to GitHub Pages at **<https://howarddierking.github.io/mermaid-event-model/>** — a landing page links to the [model viewer](https://howarddierking.github.io/mermaid-event-model/model-viewer.html) for each example model and to the [renderer playground](https://howarddierking.github.io/mermaid-event-model/core-playground.html). To run them locally instead, read on.
+
 Two demo pages, served as static HTML with no build step (mermaid, d3, and marked are loaded from a CDN at runtime):
 
 | Page | What it shows |
@@ -84,9 +88,9 @@ python3 -m http.server 8000
 
 Then open <http://localhost:8000/model-viewer.html>.
 
-A local HTTP server is required because the JS files are ES modules and most browsers block module imports over `file://`. The Python server's directory listing is also what powers the slice-spec sidebar.
+A local HTTP server is required because the JS files are ES modules and most browsers block module imports over `file://`. Locally, the Python server's directory listing is what powers the slice-spec sidebar; on GitHub Pages (which serves no directory listing) the viewer falls back to a per-directory `index.json` manifest generated at deploy time.
 
-The viewer loads `blueprint_dsl_fanin.md` by default and polls for changes every 1.5s — edit any `.md` and the open page re-renders. Try other models with `?model=blueprint_dsl`, `?model=blueprint_dsl_dcb`, or `?model=blueprint_sliceTests`.
+The viewer loads `blueprint_dsl_dcb.md` by default and polls for changes every 1.5s — edit any `.md` and the open page re-renders. Try other models with `?model=blueprint_dsl`, `?model=blueprint_dsl_fanin`, or `?model=blueprint_sliceTests`.
 
 The rendered diagram scrolls horizontally — each element gets its own column, so wide models overflow the right edge rather than compressing.
 
