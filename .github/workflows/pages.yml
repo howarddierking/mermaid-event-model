@@ -1,0 +1,67 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment; don't cancel an in-progress run.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Stage static site
+        run: |
+          mkdir -p _site
+          # HTML entry points
+          cp index.html model-viewer.html core-playground.html _site/
+          # ES modules (index.js transitively imports the rest)
+          cp index.js event-model.js event-model-mermaid.js \
+             slice-tests.js slice-tests-mermaid.js _site/
+          # Gear icon for automation nodes (event-model.js resolves ./settings.png)
+          cp settings.png _site/
+          # Example model overviews
+          cp blueprint_dsl.md blueprint_dsl_dcb.md blueprint_dsl_fanin.md _site/
+          # Per-slice spec directories
+          cp -R blueprint_dsl_dcb-slices blueprint_dsl_fanin-slices _site/
+          # Bypass Jekyll so the raw .md files are served verbatim
+          touch _site/.nojekyll
+
+      - name: Generate slice manifests
+        # GitHub Pages has no directory listing; the viewer reads these index.json
+        # manifests to populate its slice sidebar (falling back to dir-listing locally).
+        run: |
+          node -e "const fs=require('fs');for(const d of ['blueprint_dsl_dcb-slices','blueprint_dsl_fanin-slices']){const p='_site/'+d;fs.writeFileSync(p+'/index.json',JSON.stringify(fs.readdirSync(p).filter(f=>f.endsWith('.md')).sort()));}"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

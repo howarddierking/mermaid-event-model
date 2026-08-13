@@ -113,7 +113,7 @@ mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
 //   <model>.md          → the model overview file (one per model)
 //   <model>-slices/     → directory of per-slice spec files
 const params = new URLSearchParams(location.search);
-const MODEL = params.get('model') || 'blueprint_dsl_fanin';
+const MODEL = params.get('model') || 'blueprint_dsl_dcb';
 const MODEL_FILE = MODEL + '.md';
 const SLICES_DIR = MODEL + '-slices';
 const POLL_MS = 1500;
@@ -129,6 +129,16 @@ let activeFile = params.get('file') || '__model';
 let lastSrc = null;
 
 async function listSliceFiles() {
+  // Prefer a static manifest: hosts without directory listing (e.g. GitHub
+  // Pages) can't be scraped, so CI writes an index.json of the slice files.
+  try {
+    const res = await fetch('./' + SLICES_DIR + '/index.json', { cache: 'no-store' });
+    if (res.ok) {
+      const files = await res.json();
+      if (Array.isArray(files)) return [...files].sort();
+    }
+  } catch (_) { /* fall through to directory listing */ }
+  // Fallback: scrape the auto-generated directory index (local `http.server`).
   try {
     const res = await fetch('./' + SLICES_DIR + '/', { cache: 'no-store' });
     if (!res.ok) return [];

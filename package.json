@@ -47,7 +47,7 @@
   "bugs": {
     "url": "https://github.com/howarddierking/mermaid-event-model/issues"
   },
-  "homepage": "https://github.com/howarddierking/mermaid-event-model#readme",
+  "homepage": "https://howarddierking.github.io/mermaid-event-model/",
   "license": "MIT",
   "author": "Howard Dierking",
   "engines": {

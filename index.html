@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Event Model DSL — Live Demo</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, sans-serif;
+    color: #0f172a;
+    line-height: 1.55;
+    background: #fafafa;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 56px 24px 80px; }
+
+  header h1 { font-size: 30px; margin: 0 0 8px; }
+  header p.lede { font-size: 16px; color: #334155; margin: 0 0 4px; }
+  header p.sub { font-size: 14px; color: #64748b; margin: 0; }
+
+  h2 {
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #6b7280;
+    margin: 44px 0 12px;
+  }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  a.card {
+    display: block;
+    padding: 16px 18px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #fff;
+    text-decoration: none;
+    color: inherit;
+    transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s;
+  }
+  a.card:hover {
+    border-color: #93c5fd;
+    box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
+    transform: translateY(-1px);
+  }
+  a.card .title { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+  a.card .title code {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    color: #475569;
+    font-weight: 400;
+  }
+  a.card .desc { font-size: 13px; color: #64748b; }
+
+  .links { font-size: 14px; }
+  .links a { color: #1d4ed8; text-decoration: none; }
+  .links a:hover { text-decoration: underline; }
+  .links .sep { color: #cbd5e1; margin: 0 8px; }
+
+  footer { margin-top: 56px; font-size: 12px; color: #94a3b8; }
+  footer a { color: #64748b; }
+  code { font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Event Model DSL</h1>
+    <p class="lede">A text DSL and zero-build SVG renderer for
+      <a href="https://eventmodeling.org">Event Modeling</a> diagrams.</p>
+    <p class="sub">Actors and aggregates on swimlanes, a strict horizontal timeline,
+      collapsible data sections, and vertical-slice bounding boxes — authored as plain
+      text and rendered as a Mermaid external diagram type.</p>
+  </header>
+
+  <h2>Example models</h2>
+  <div class="cards">
+    <a class="card" href="./model-viewer.html?model=blueprint_dsl">
+      <div class="title">Hotel booking <code>blueprint_dsl</code></div>
+      <div class="desc">The canonical aggregate-based model — the clearest
+        introduction to the DSL.</div>
+    </a>
+    <a class="card" href="./model-viewer.html?model=blueprint_dsl_dcb">
+      <div class="title">Hotel booking — DCB <code>blueprint_dsl_dcb</code></div>
+      <div class="desc">The same system in Dynamic Consistency Boundary style:
+        no aggregates, <code>reads [...]</code> on commands.</div>
+    </a>
+    <a class="card" href="./model-viewer.html?model=blueprint_dsl_fanin">
+      <div class="title">Fan-in stress test <code>blueprint_dsl_fanin</code></div>
+      <div class="desc">Sixteen events converging into a single read model — a
+        layout stress test.</div>
+    </a>
+    <a class="card" href="./core-playground.html">
+      <div class="title">Renderer playground</div>
+      <div class="desc">Edit DSL and render it to SVG live, without Mermaid in the
+        loop.</div>
+    </a>
+  </div>
+
+  <h2>Learn more</h2>
+  <p class="links">
+    <a href="https://github.com/howarddierking/mermaid-event-model">GitHub repository</a>
+    <span class="sep">·</span>
+    <a href="https://www.npmjs.com/package/@howarddierking/mermaid-event-model">npm package</a>
+    <span class="sep">·</span>
+    <a href="https://eventmodeling.org">What is Event Modeling?</a>
+  </p>
+
+  <footer>
+    Each model view lists its per-slice Given/When/Then specs in the sidebar.
+    Install with <code>npm i @howarddierking/mermaid-event-model</code>.
+  </footer>
+</div>
+</body>
+</html>
