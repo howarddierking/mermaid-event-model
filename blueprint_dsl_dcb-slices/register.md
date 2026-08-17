@@ -36,14 +36,27 @@ _Describe the high-level intent of this slice in prose. What user-visible capabi
 
 ```mermaid
 sliceTests
-	test["Describe what this test verifies"]
-		given
-			# Preconditions: events that have already occurred,
-			# read models that must be present.
+	test["Registers a new guest and records their name and email"]
 		when
-			# The command (or signal) under test. Omit `when`
-			# for state-view tests that only project a read model.
+			command["Register"] {
+				name: string = "Ada Lovelace"
+				email: string = "ada@example.com"
+			}
 		then
-			# Expected outcomes: emitted events, populated read
-			# models, signals to external systems.
+			domainEvent["Registered"] {
+				name: string = "Ada Lovelace"
+				email: string = "ada@example.com"
+			}
+
+	test["Rejects a registration whose email is already registered"]
+		given
+			domainEvent["Registered"] {
+				email: string = "ada@example.com"
+			}
+		when
+			command["Register"] {
+				email: string = "ada@example.com"
+			}
+		then
+			error["A guest cannot be registered more than once"]
 ```

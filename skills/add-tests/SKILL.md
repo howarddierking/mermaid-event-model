@@ -192,14 +192,42 @@ whole data sections by default. Instead:
 
 - Include the fields the intent's language actually exercises — the attributes
   identified and grounded in step 2 — on the elements where they belong.
-- Always include the minimal **identifying/key fields** needed to make the
-  scenario coherent (typically the `*Id: UUID` keys that tie a given event to
-  the command and outcome), even if the prose didn't name them explicitly —
-  these come from the model, so they're grounded.
 - Omit fields the test doesn't speak to. A test about the booking timestamp
   need not restate `roomType` or `capacity`.
-- When the intent is vague about data, keep it minimal: labels plus key fields.
-  Never emit more than the model supports.
+- When the intent is vague about data, keep it minimal: labels plus whatever
+  correlates the scenario. Never emit more than the model supports.
+
+**A field earns its place only if it correlates or is asserted.** Apply this to
+every field, and especially to identifier fields — do *not* reflexively include
+the `*Id: UUID` keys. A field belongs in the test when either:
+
+- it appears in **at least two** of `given` / `when` / `then`, so it ties the
+  scenario together; or
+- the intent **explicitly asserts** it ("stamps the booking time").
+
+A field that would appear in exactly one section earns no place. It is either
+noise, or — worse — an assertion about a value the *implementation generates*,
+which forces deterministic or mocked id generation just to make the test pass.
+
+Two worked cases from this repo:
+
+- In `book_room`, `roomId` correlates: it appears in the given `Room Added`, in
+  the `Book Room` command, and in the emitted `Room Booked`. Include it.
+- In `register`, `guestId` does **not**. The command carries only `name`,
+  `email`, `password`, so the handler mints `guestId` on the emitted
+  `Registered`; pinning it to a value tests id generation, not registration.
+  The field that actually correlates the duplicate-registration scenario is
+  `email`. Omit `guestId`.
+
+So the question to ask is *which field ties the given to the when* — that is the
+correlating key, and it is **not** always the `*Id: UUID`. Natural keys (an
+email, a room number) correlate scenarios at least as often as surrogate ones.
+
+**Escape hatch for generated values.** When a test genuinely needs to assert
+that an element *carries* a field whose value the implementation mints, include
+it **type-only** (`bookingId: UUID`, no `=`). That asserts presence without
+pinning a value — see step 3a. Reach for this only when presence is the point;
+otherwise omit the field.
 
 Copy each included field's declared **type** from the model verbatim
 (`bookedAt: timestamp`, not a guessed type).
@@ -287,9 +315,16 @@ Intent: *"books a room for a registered guest and stamps the booking time."*
 - Grounded attributes: "registered guest" → `guestId` (on `Registered` and the
   command); "booking time" → `bookedAt` on `Room Booked` — both present in the
   model. ✓ No gaps.
-- Field subset: keep `guestId`/`roomId` keys to tie the scenario together and
-  `bookedAt` because the intent asks for it; omit `name`, `email`, `roomNumber`,
-  `roomType`, `checkIn`, `checkOut` — the test doesn't speak to them.
+- Field subset: keep `guestId` and `roomId` — each correlates, appearing in a
+  given, the command, and the outcome — plus `bookedAt` because the intent
+  explicitly asserts it. Omit `name`, `email`, `roomNumber`, `roomType`,
+  `checkIn`, `checkOut` — the test doesn't speak to them. Also omit
+  `bookingId`: it would appear in `then` alone, and the handler mints it, so
+  pinning `bookingId = "bk-001"` would assert generated data. (If a test did
+  need to claim the event carries one, it would write `bookingId: UUID`
+  type-only.) Note that in the *sibling* test — "allows booking when the
+  overlapping booking was already checked out" — `bookingId` **does** earn its
+  place, because it ties the given `Room Booked` to the given `Checked Out`.
 - Example values: reuse `guestId = "g-001"` and `roomId = "room-101"` across the
   given, command, and outcome so the scenario traces as one; give `bookedAt` a
   concrete timestamp.
@@ -312,7 +347,6 @@ Appended:
 			}
 		then
 			domainEvent["Room Booked"] {
-				bookingId: UUID = "bk-001"
 				guestId: UUID = "g-001"
 				roomId: UUID = "room-101"
 				bookedAt: timestamp = 2026-08-12T14:00:00Z
