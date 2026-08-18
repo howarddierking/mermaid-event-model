@@ -1,6 +1,6 @@
 # blueprint_dsl
 
-The canonical aggregate-based hotel-booking event model. Demonstrates every DSL feature: actors, aggregates, UIs, commands, events (including externalEvents), read models, automations, data sections, and slices — including a fan-in (`paymentsToProcess` updated by both `paymentRequested` and `paymentSucceeded`) and a feedback cycle (`paymentSucceeded → paymentsToProcess → paymentProcessor → ...`).
+The canonical aggregate-based hotel-booking event model. Demonstrates every DSL feature: actors, aggregates, UIs, commands, events (including externalEvents), read models, automations, data sections, and slices — including a fan-in (`paymentsToProcess` updated by `paymentRequested`, `paymentSubmitted`, and `paymentSucceeded`) and a feedback cycle (`paymentSubmitted → paymentsToProcess → paymentProcessor → ...`). Each of the four canonical slice patterns appears: Command, View, Automation, and Translation.
 
 ## Model
 
@@ -11,7 +11,6 @@ eventModel
 	aggregate Inventory
 	aggregate Auth
 	aggregate Payment
-	aggregate GPS
 
 	ui:Guest reg_ui["Registration UI"] {
 		name: string
@@ -148,10 +147,10 @@ eventModel
 		checkin_ui-->checkin
 		checkin-->checkedIn
 
-	slice update_guest_roster["Update Guest Roster"]
+	slice feed_checked_in["Feed: Checked In"]
 		checkedIn-->guestRoster
 
-	domainEvent:GPS positionUpdated["Position Updated"] {
+	externalEvent positionUpdated["Position Updated"] {
 		guestId: UUID
 		latitude: float
 		longitude: float
@@ -167,7 +166,7 @@ eventModel
 		positionUpdated-->hotelProximityTranslator
 		hotelProximityTranslator-->guestLeft
 
-	slice track_guest_presence["Track Guest Presence"]
+	slice feed_guest_left["Feed: Guest Left Hotel"]
 		guestLeft-->guestRoster
 
 	automation:Manager checkOutAutomation["Check-out Automation"]
@@ -183,10 +182,8 @@ eventModel
 		checkedOutAt: timestamp
 	}
 
-	slice trigger_checkout["Trigger Check-out"]
+	slice check_out_automation["Check-out Automation"]
 		guestRoster-->checkOutAutomation
-
-	slice check_out["Check Out"]
 		checkOutAutomation-->checkOut
 		checkOut-->checkedOut
 
@@ -223,10 +220,31 @@ eventModel
 		payment_ui-->pay
 		pay-->paymentRequested
 
-	slice show_payments_to_process["Show Payments to Process"]
+	slice feed_payment_requested["Feed: Payment Requested"]
 		paymentRequested-->paymentsToProcess
 
 	automation:Guest paymentProcessor["Payment Processor"]
+	command submitPayment["Submit Payment"] {
+		paymentId: UUID
+		amount: decimal
+		currency: string
+		paymentMethod: string
+	}
+	domainEvent:Payment paymentSubmitted["Payment Submitted"] {
+		paymentId: UUID
+		bookingId: UUID
+		amount: decimal
+		submittedAt: timestamp
+	}
+
+	slice payment_processor["Payment Processor"]
+		paymentsToProcess-->paymentProcessor
+		paymentProcessor-->submitPayment
+		submitPayment-->paymentSubmitted
+
+	slice feed_payment_submitted["Feed: Payment Submitted"]
+		paymentSubmitted-->paymentsToProcess
+
 	externalEvent gatewayConfirmed["Gateway Confirmed"] {
 		paymentId: UUID
 		transactionRef: string
@@ -244,15 +262,11 @@ eventModel
 		succeededAt: timestamp
 	}
 
-	slice trigger_payment_processing["Trigger Payment Processing"]
-		paymentsToProcess-->paymentProcessor
-
-	slice process_payment["Process Payment"]
-		paymentProcessor-->processPayment
+	slice gateway_confirmation["Gateway Confirmation"]
 		gatewayConfirmed-->processPayment
 		processPayment-->paymentSucceeded
 
-	slice update_payment_status["Update Payment Status"]
+	slice feed_payment_succeeded["Feed: Payment Succeeded"]
 		paymentSucceeded-->paymentsToProcess
 
 	readModel salesReport["Sales Report"] {

@@ -116,7 +116,7 @@ This skill is **idempotent**. On every run:
 7. **Naming conventions.**
 
    - Automation and Translation Pattern slices: name from the automation (e.g. `payment_processor["Process Payment"]`, `delivery_tracker["Track Delivery"]`).
-   - Abbreviated Translation slices (no automation node): name from the command (e.g. `gateway_confirmation["Gateway Confirmation"]`).
+   - Abbreviated Translation slices (no automation node): name from the command, or from the inbound external event when that reads better — e.g. `gateway_confirmation["Gateway Confirmation"]` for `gatewayConfirmed → processPayment`, since the slice is about ingesting that event rather than about the command's own name.
    - Command slices: name from the command (e.g. `book_room["Book Room"]`).
    - View slices: name from the read model and/or consumer (e.g. `view_room_availability`, `update_guest_roster`).
    - Fan-in per-event slices: `feed_<event>` or `update_<readModel>_<event>`.
