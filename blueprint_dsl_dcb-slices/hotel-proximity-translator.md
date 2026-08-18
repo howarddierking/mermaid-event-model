@@ -6,7 +6,7 @@
 
 ```mermaid
 eventModel
-	domainEvent positionUpdated["Position Updated"] {
+	externalEvent positionUpdated["Position Updated"] {
 		guestId: UUID
 		latitude: float
 		longitude: float

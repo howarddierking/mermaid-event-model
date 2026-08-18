@@ -24,14 +24,17 @@ eventModel
 		status: string
 	}
 	automation:Guest paymentProcessor["Payment Processor"]
-	externalEvent gatewayConfirmed["Gateway Confirmed"] {
+	command submitPayment["Submit Payment"] reads [paymentRequested, paymentSubmitted] {
 		paymentId: UUID
-		transactionRef: string
-		confirmedAt: timestamp
+		amount: decimal
+		currency: string
+		paymentMethod: string
 	}
-	command processPayment["Process Payment"] reads [paymentRequested, paymentSucceeded] {
+	domainEvent paymentSubmitted["Payment Submitted"] {
 		paymentId: UUID
-		gatewayRef: string
+		bookingId: UUID
+		amount: decimal
+		submittedAt: timestamp
 	}
 	domainEvent paymentSucceeded["Payment Succeeded"] {
 		paymentId: UUID
@@ -42,11 +45,11 @@ eventModel
 	}
 	slice payment_processor["Payment Processor"]
 		paymentRequested-->paymentsToProcess
+		paymentSubmitted-->paymentsToProcess
 		paymentSucceeded-->paymentsToProcess
 		paymentsToProcess-->paymentProcessor
-		paymentProcessor-->processPayment
-		gatewayConfirmed-->processPayment
-		processPayment-->paymentSucceeded
+		paymentProcessor-->submitPayment
+		submitPayment-->paymentSubmitted
 ```
 
 ## Description

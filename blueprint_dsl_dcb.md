@@ -140,7 +140,7 @@ eventModel
 		checkin_ui-->checkin
 		checkin-->checkedIn
 
-	domainEvent positionUpdated["Position Updated"] {
+	externalEvent positionUpdated["Position Updated"] {
 		guestId: UUID
 		latitude: float
 		longitude: float
@@ -207,12 +207,32 @@ eventModel
 		pay-->paymentRequested
 
 	automation:Guest paymentProcessor["Payment Processor"]
+	command submitPayment["Submit Payment"] reads [paymentRequested, paymentSubmitted] {
+		paymentId: UUID
+		amount: decimal
+		currency: string
+		paymentMethod: string
+	}
+	domainEvent paymentSubmitted["Payment Submitted"] {
+		paymentId: UUID
+		bookingId: UUID
+		amount: decimal
+		submittedAt: timestamp
+	}
+	slice payment_processor["Payment Processor"]
+		paymentRequested-->paymentsToProcess
+		paymentSubmitted-->paymentsToProcess
+		paymentSucceeded-->paymentsToProcess
+		paymentsToProcess-->paymentProcessor
+		paymentProcessor-->submitPayment
+		submitPayment-->paymentSubmitted
+
 	externalEvent gatewayConfirmed["Gateway Confirmed"] {
 		paymentId: UUID
 		transactionRef: string
 		confirmedAt: timestamp
 	}
-	command processPayment["Process Payment"] reads [paymentRequested, paymentSucceeded] {
+	command processPayment["Process Payment"] reads [paymentSubmitted, paymentSucceeded] {
 		paymentId: UUID
 		gatewayRef: string
 	}
@@ -223,11 +243,7 @@ eventModel
 		transactionRef: string
 		succeededAt: timestamp
 	}
-	slice payment_processor["Payment Processor"]
-		paymentRequested-->paymentsToProcess
-		paymentSucceeded-->paymentsToProcess
-		paymentsToProcess-->paymentProcessor
-		paymentProcessor-->processPayment
+	slice gateway_confirmation["Gateway Confirmation"]
 		gatewayConfirmed-->processPayment
 		processPayment-->paymentSucceeded
 
