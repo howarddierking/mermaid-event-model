@@ -4,6 +4,10 @@
 
 ## Model
 
+<!-- Derived from the parent eventModel and refreshed on every spec-slices run. Do not hand-edit. -->
+
+**Pattern:** Command
+
 ```mermaid
 eventModel
 	actor Guest
