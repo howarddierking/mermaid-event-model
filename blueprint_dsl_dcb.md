@@ -167,9 +167,13 @@ eventModel
 		roomId: UUID
 		checkedOutAt: timestamp
 	}
-	slice check_out_automation["Check-out Automation"]
+	slice feed_checked_in["Feed: Checked In"]
 		checkedIn-->guestRoster
+
+	slice feed_guest_left["Feed: Guest Left Hotel"]
 		guestLeft-->guestRoster
+
+	slice check_out_automation["Check-out Automation"]
 		guestRoster-->checkOutAutomation
 		checkOutAutomation-->checkOut
 		checkOut-->checkedOut
@@ -219,10 +223,16 @@ eventModel
 		amount: decimal
 		submittedAt: timestamp
 	}
-	slice payment_processor["Payment Processor"]
+	slice feed_payment_requested["Feed: Payment Requested"]
 		paymentRequested-->paymentsToProcess
+
+	slice feed_payment_submitted["Feed: Payment Submitted"]
 		paymentSubmitted-->paymentsToProcess
+
+	slice feed_payment_succeeded["Feed: Payment Succeeded"]
 		paymentSucceeded-->paymentsToProcess
+
+	slice payment_processor["Payment Processor"]
 		paymentsToProcess-->paymentProcessor
 		paymentProcessor-->submitPayment
 		submitPayment-->paymentSubmitted

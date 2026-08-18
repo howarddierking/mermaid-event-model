@@ -27,7 +27,7 @@ In Event Modeling a **vertical slice** is a cohesive unit of behavior cutting ac
 
 Two consequences drive the algorithm:
 
-- **An automation's read-side observation and its command emission belong to the same slice.** The automation is not a slice boundary — it's the connecting tissue that makes the whole pattern one cohesive unit of work.
+- **An automation's observation of its view and its command emission belong to the same slice.** The automation is not a slice boundary — it's the connecting tissue that makes `readModel → automation → command → event(s)` one cohesive unit of work. Note this covers the `readModel → automation` edge only; the `event → readModel` edges that *populate* the view are separate slices, for the reason given under "Slice granularity" below.
 - **Automation and Translation cannot be told apart structurally.** The only construct in this DSL that marks a system boundary is `externalEvent`, so it is the sole discriminator: a slice with the Automation shape whose read side is fed by an `externalEvent` is a **Translation**; one whose read side is entirely `domainEvent`s is an **Automation**.
 
 ### The abbreviated variant
@@ -39,6 +39,14 @@ The elided View and Trigger carry no code of their own, so code generation is un
 ### Outbound translation is not currently expressible
 
 `externalEvent` marks the source side only. A slice that translates our events *outward* into another system is structurally indistinguishable from an Automation and will be classified as one. If a slice's command name implies an outbound call, say so in the report — but do not guess, and do not invent a marker for it.
+
+### Slice granularity: the smallest set of edges that must change together
+
+A slice is the unit of **incremental regeneration** — the intended workflow is an agent that regenerates only the slices a model change touched. That makes the slice boundary the blast radius of every change, and it is the criterion behind every grouping decision below: **a slice is the smallest set of edges that must change together.**
+
+This is why the events feeding an automation's view are their own View slices rather than part of the automation slice. A projection handler and the automation that reads its output change for entirely different reasons — bundling them means editing the automation's trigger regenerates projection handlers that did not change, and editing one projection regenerates the automation. It is also what makes fan-in worth splitting at all: with sixteen events feeding one read model, a schema change to one of them should dirty one slice, not a sixteen-handler monolith.
+
+What stays together: the automation's `readModel → automation → command → event(s)` chain is a single slice, because an automation exists in order to issue its command. Changing the condition and changing the command it issues are nearly always the same change.
 
 ### The pattern is reported, never written into the DSL
 
@@ -69,17 +77,18 @@ This skill is **idempotent**. On every run:
 3. **Identify Automation and Translation Patterns first.** For every `automation` that has BOTH at least one incoming `readModel → automation` edge AND at least one outgoing `automation → command` edge, claim a single slice containing:
 
    - Every `readModel → automation` edge for that automation.
-   - Every `event → readModel` edge feeding the input read model(s) — the canonical pattern is `Event(s) → View → ...`, so the projecting events are part of this slice.
    - Every `automation → command` edge from this automation.
    - Every `command → domainEvent` edge produced by those commands.
 
-   Then **classify it by its read side**: **Translation** if any event feeding it is an `externalEvent`, **Automation** if they are all `domainEvent`s. (If it is fed by both, that is a defect — see step 6.)
+   **Do NOT claim the `event → readModel` edges feeding the input read model.** Those become their own View slices in step 4. The canonical drawing shows `Event(s) → View → ...`, but the projections that populate the view change independently of the automation that reads it — see "Slice granularity" below.
+
+   Then **classify it by its read side**. Because the feeding edges now live in separate slices, resolve them **against the whole model**, not just this slice: find the automation's input read model, collect every `event → readModel` edge targeting it anywhere in the DSL, and check those events' kinds. **Translation** if any is an `externalEvent`, **Automation** if all are `domainEvent`s. (If both, that is a defect — see step 6.) Classifying from only the edges inside the slice would see no events at all and always answer Automation.
 
    Claim these edges off the unclassified pool — they will not be considered again in steps 4 and 5. Name the slice after the automation (e.g. `payment_processor["Payment Processor"]`, `email_verifier["Email Verifier"]`).
 
 4. **For remaining read-side edges** (those not claimed by an Automation Pattern), build slices following Pattern 2 (View). Two read-side edges are connected when they share a `readModel` node. The unit of grouping is the connected component, with one practical exception:
 
-   - **Fan-in into a view-only read model** (a read model with ≥2 incoming `event → readModel` edges that's NOT an automation's input): split into per-event slices for visual clarity. Emit one slice per `event → readModel` edge (named `feed_<event>` or `update_<readModel>_<event>`) plus one `view_<readModel>` slice containing the `readModel → consumer` edges. This is a renderer-friendly extension; canonical Pattern 2 would bundle them, but our renderer would draw a diagram-spanning bar.
+   - **Fan-in** (a read model with ≥2 incoming `event → readModel` edges): split into per-event slices. Emit one slice per `event → readModel` edge (named `feed_<event>`) plus one `view_<readModel>` slice containing the `readModel → consumer` edges. This applies **whether or not** the read model feeds an automation — an automation's input read model is split exactly like any other. Canonical Pattern 2 would bundle them; we split for the reason in "Slice granularity" below.
    - All other view patterns (single event, or single consumer) become one slice each, named after the readModel or its consumer.
 
 5. **For remaining command-side edges** (those not claimed in step 3), group them into slices — two command-side edges are connected when they share a `command` node, and each connected component is one slice. Then **classify each by its trigger**, the kind of the node on the inbound edge into the command:
@@ -125,7 +134,7 @@ This skill is **idempotent**. On every run:
 
 10. **Verify** every edge is accounted for: every edge that was bare in step 1 should now sit inside exactly one slice (or be on the unclassified list and explicitly skipped). If any edge is in zero slices or two slices, surface that as an error before writing.
 
-## Worked example: an automation that closes a loop
+## Worked example: an automation and its feed slices
 
 Given these unsliced edges (a hotel-booking payment-processing fragment):
 
@@ -141,20 +150,30 @@ salesReport-->sales_ui
 
 …where `paymentsToProcess` and `salesReport` are read models, `paymentProcessor` is an automation, `processPayment` is a command, the rest are events, and `sales_ui` is a UI.
 
-Step 3 finds `paymentProcessor` has both a `readModel → automation` edge (`paymentsToProcess → paymentProcessor`) AND an `automation → command` edge (`paymentProcessor → processPayment`). Claim the canonical Automation Pattern slice — including the events feeding `paymentsToProcess` and the events produced by `processPayment`:
+Step 3 finds `paymentProcessor` has both a `readModel → automation` edge (`paymentsToProcess → paymentProcessor`) AND an `automation → command` edge (`paymentProcessor → processPayment`). Claim the **automation core** — the trigger, its command, and the events that command produces — but *not* the events feeding `paymentsToProcess`:
 
 ```
 slice payment_processor["Process Payment"]
-    paymentRequested-->paymentsToProcess
-    paymentSucceeded-->paymentsToProcess
     paymentsToProcess-->paymentProcessor
     paymentProcessor-->processPayment
     processPayment-->paymentSucceeded
 ```
 
-This is one slice that closes the loop — exactly Pattern 3's `Event(s) → View → Automation → Command → Event(s)` shape, including the back-edge that feeds new events into the same view. The automation node is part of this single slice, not split between two.
+To classify it, resolve the feeding events of `paymentsToProcess` across the whole model — they are not in this slice. `paymentRequested` and `paymentSucceeded` are both `domainEvent`s, so this is an **Automation**. Had either been an `externalEvent`, it would be a **Translation**.
 
-`paymentSucceeded → salesReport` and `salesReport → sales_ui` are NOT claimed by the Automation Pattern (they involve a different read model with no automation consumer), so they form a Pattern 2 view slice:
+`paymentsToProcess` has two incoming `event → readModel` edges, so step 4's fan-in rule gives each its own View slice:
+
+```
+slice feed_payment_requested["Feed: Payment Requested"]
+    paymentRequested-->paymentsToProcess
+
+slice feed_payment_succeeded["Feed: Payment Succeeded"]
+    paymentSucceeded-->paymentsToProcess
+```
+
+`paymentSucceeded` is produced by the automation's own command *and* feeds its view, so the loop still closes — but across slice boundaries rather than inside one. That is the intent: the projection that retires a todo row and the automation that picks rows up are separately regenerable.
+
+`paymentSucceeded → salesReport` and `salesReport → sales_ui` involve a different read model, with no automation consumer and no fan-in, so they form a single Pattern 2 view slice:
 
 ```
 slice view_sales_report["View Sales Report"]
@@ -162,7 +181,7 @@ slice view_sales_report["View Sales Report"]
     salesReport-->sales_ui
 ```
 
-Total: 2 slices for 7 edges. The boundary `paymentSucceeded` event appears in both — output of the automation slice, input to the view slice.
+Total: 4 slices for 7 edges. The boundary `paymentSucceeded` event appears in three of them — output of the automation, input to its own view's feed slice, and input to the sales report.
 
 ## Worked example: telling Translation from Automation
 

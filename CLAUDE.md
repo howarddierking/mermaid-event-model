@@ -109,6 +109,17 @@ data-section syntax.
   retroactively rewritten.
 - `add-slices` rewrites the slice declarations in an `eventModel` block;
   it strips existing slices first to stay idempotent. It ignores `reads`.
+  It also **classifies** each slice against the four canonical patterns —
+  Command, View, Automation, Translation — with `externalEvent` as the sole
+  discriminator between the last two, since they are structurally identical.
+  Slice boundaries are chosen by blast radius: **a slice is the smallest set
+  of edges that must change together**, because the slice is the unit of
+  incremental regeneration. That's why events feeding an automation's view
+  are separate View slices from the automation that reads it.
+- The pattern is a **derived fact**: never written into the DSL (an author
+  could assert something the edges contradict), recorded instead in each
+  slice spec's `## Model` section by `spec-slices`, which overwrites it on
+  every run.
 - The grammar of `sliceTests` is enforced by a regex in `slice-tests.js`
   (`parseSliceTests`). When adding a new item kind, update both the regex
   AND `ITEM_STYLES`, AND mention it in the grammar comment at the top of

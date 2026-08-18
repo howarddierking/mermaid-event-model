@@ -1,16 +1,15 @@
-# Check-out Automation
+# Feed: Guest Left Hotel
 
-<!-- slice id: check_out_automation -->
+<!-- slice id: feed_guest_left -->
 
 ## Model
 
 <!-- Derived from the parent eventModel and refreshed on every spec-slices run. Do not hand-edit. -->
 
-**Pattern:** Automation
+**Pattern:** View
 
 ```mermaid
 eventModel
-	actor Manager
 	readModel guestRoster["Guest Roster"] {
 		guestId: UUID
 		guestName: string
@@ -18,22 +17,12 @@ eventModel
 		checkedInAt: timestamp
 		isPresent: boolean
 	}
-	automation:Manager checkOutAutomation["Check-out Automation"]
-	command checkOut["Checked Out"] reads [checkedIn, checkedOut] {
-		bookingId: UUID
+	domainEvent guestLeft["Guest Left Hotel"] {
 		guestId: UUID
-		roomId: UUID
+		departedAt: timestamp
 	}
-	domainEvent checkedOut["Checked Out"] {
-		bookingId: UUID
-		guestId: UUID
-		roomId: UUID
-		checkedOutAt: timestamp
-	}
-	slice check_out_automation["Check-out Automation"]
-		guestRoster-->checkOutAutomation
-		checkOutAutomation-->checkOut
-		checkOut-->checkedOut
+	slice feed_guest_left["Feed: Guest Left Hotel"]
+		guestLeft-->guestRoster
 ```
 
 ## Description
@@ -53,5 +42,9 @@ sliceTests
 			# for state-view tests that only project a read model.
 		then
 			# Expected outcomes: emitted events, populated read
-			# models, signals to external systems.
+			# models, signals to external systems. For rejection
+			# scenarios use `error["<message>"]` — the message is
+			# read verbatim by code generation.
+	# Data-section fields may carry example values to demonstrate the
+	# case and seed code-gen fixtures, e.g. { checkIn: date = 2026-08-12 }.
 ```
