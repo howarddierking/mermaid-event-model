@@ -1,0 +1,121 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - production
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: aws-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  NODE_VERSION: "18"
+
+jobs:
+  deploy:
+    name: Build & Deploy to AWS
+    runs-on: ubuntu-latest
+    environment:
+      name: aws-production
+      url: ${{ steps.output.outputs.site_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      - name: Install CDK dependencies
+        working-directory: infra
+        run: npm ci
+
+      - name: Stage static site
+        run: |
+          mkdir -p _site
+
+          # HTML entry points
+          cp index.html model-viewer.html core-playground.html _site/
+
+          # ES modules
+          cp index.js event-model.js event-model-mermaid.js \
+             slice-tests.js slice-tests-mermaid.js _site/
+
+          # Static assets
+          cp settings.png _site/
+
+          # Example model files
+          cp blueprint_dsl.md blueprint_dsl_dcb.md blueprint_dsl_fanin.md _site/
+
+          # Slice spec directories
+          cp -R blueprint_dsl_dcb-slices blueprint_dsl_fanin-slices _site/
+
+          # Generate slice manifests
+          node -e "
+            const fs = require('fs');
+            for (const d of ['blueprint_dsl_dcb-slices', 'blueprint_dsl_fanin-slices']) {
+              const p = '_site/' + d;
+              const files = fs.readdirSync(p).filter(f => f.endsWith('.md')).sort();
+              fs.writeFileSync(p + '/index.json', JSON.stringify(files));
+            }
+          "
+
+          echo "📦 Staged $(find _site -type f | wc -l) files"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-deploy
+
+      - name: CDK Deploy
+        working-directory: infra
+        run: npx cdk deploy --require-approval never --outputs-file cdk-outputs.json
+
+      - name: Extract deployment URL
+        id: output
+        working-directory: infra
+        run: |
+          URL=$(node -e "const o=require('./cdk-outputs.json');console.log(Object.values(o)[0]?.DistributionUrl||'')")
+          echo "site_url=$URL" >> "$GITHUB_OUTPUT"
+          echo "### 🌐 Deployed to AWS" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**URL:** $URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Resource | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CloudFront | $URL |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Region | ${{ env.AWS_REGION }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Stack | MermaidEventModelSite |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke test
+        run: |
+          URL="${{ steps.output.outputs.site_url }}"
+          if [ -n "$URL" ]; then
+            echo "Testing $URL ..."
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ Site is live (HTTP $STATUS)"
+            else
+              echo "⚠️ Site returned HTTP $STATUS (CloudFront may still be propagating)"
+            fi
+          fi
