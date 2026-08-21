@@ -1,8 +1,11 @@
 name: Deploy to AWS
 
+# Automatic deploys are disabled until the target AWS account is finalized.
+# Before re-enabling the push trigger:
+#   1. Deploy the stack locally against the correct account (bash deploy.sh deploy)
+#   2. Set the AWS_DEPLOY_ROLE_ARN repo secret to the new role ARN
+# Run manually via the Actions tab ("Run workflow") in the meantime.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       environment:
