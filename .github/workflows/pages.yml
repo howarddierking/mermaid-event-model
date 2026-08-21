@@ -1,8 +1,8 @@
 name: Deploy to GitHub Pages
 
+# Automatic deploys are disabled — this project deploys to AWS (see deploy-aws.yml).
+# Kept for manual runs only via the Actions tab ("Run workflow").
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
