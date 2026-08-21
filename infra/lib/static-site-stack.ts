@@ -170,6 +170,13 @@ export class StaticSiteStack extends cdk.Stack {
       ],
     });
 
+    // The GitHub repo (owner/name) allowed to assume the deploy role via OIDC.
+    // Override with:  cdk deploy -c githubRepo=owner/name
+    const githubRepo =
+      (this.node.tryGetContext("githubRepo") as string | undefined) ||
+      process.env.GITHUB_REPOSITORY ||
+      "patrocinio/mermaid-event-model";
+
     const deployRole = new iam.Role(this, "GitHubActionsDeployRole", {
       roleName: `${this.stackName}-GitHubActionsDeployRole`,
       assumedBy: new iam.WebIdentityPrincipal(
@@ -179,8 +186,7 @@ export class StaticSiteStack extends cdk.Stack {
             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
           },
           StringLike: {
-            "token.actions.githubusercontent.com:sub":
-              "repo:howarddierking/mermaid-event-model:*",
+            "token.actions.githubusercontent.com:sub": `repo:${githubRepo}:*`,
           },
         }
       ),
