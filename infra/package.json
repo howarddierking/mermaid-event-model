@@ -1,0 +1,22 @@
+{
+  "name": "mermaid-event-model-infra",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AWS CDK infrastructure for mermaid-event-model static site",
+  "scripts": {
+    "build": "tsc",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy --require-approval never",
+    "destroy": "cdk destroy",
+    "diff": "cdk diff"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "aws-cdk": "^2.150.0",
+    "typescript": "~5.5.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0"
+  }
+}
