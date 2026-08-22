@@ -25,7 +25,7 @@ eventModel
 		reads [checkedIn, checkedOut] by bookingId
 	domainEvent checkedOut["Checked Out"] {
 		*bookingId: UUID
-		*roomId: UUID
+		*roomNumber: int
 		*email: string
 		checkedOutAt: timestamp
 	}

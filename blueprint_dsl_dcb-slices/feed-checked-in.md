@@ -13,7 +13,7 @@ eventModel
 	domainEvent checkedIn["Checked In"] {
 		*bookingId: UUID
 		*email: string
-		roomId: UUID
+		roomNumber: int
 		checkedInAt: timestamp
 	}
 	readModel guestRoster["Guest Roster"] {

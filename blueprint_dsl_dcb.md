@@ -14,11 +14,12 @@ eventModel
 		email: string
 		password: string
 	}
-	command Register reads [Registered] {
+	command Register {
 		name: string
 		email: string
 		password: string
 	}
+		reads [Registered] by email
 	domainEvent Registered {
 		*email: string
 		name: string
@@ -40,46 +41,44 @@ eventModel
 		roomType: string
 		capacity: int
 	}
-		reads [ra] by roomNumber
-	domainEvent ra["Room Added"] {
-		*roomId: UUID
+		reads [roomAdded] by roomNumber
+	domainEvent roomAdded["Room Added"] {
 		*roomNumber: int
 		floor: int
 		roomType: string
 		capacity: int
 	}
 	readModel avail["Room Availability"] {
-		*roomId: UUID
-		roomNumber: int
+		*roomNumber: int
 		roomType: string
 		isAvailable: boolean
 		nextCheckIn: date
 	}
 	slice add_room["Add Room"]
 		room_ui-->addRoom
-		addRoom-->ra
+		addRoom-->roomAdded
 
 	slice view_room_availability["View Room Availability"]
-		ra-->avail
+		roomAdded-->avail
 		avail-->booking_ui
 
 	ui:Guest booking_ui["Booking Screen"] {
-		roomId: UUID
+		roomNumber: int
 		roomType: string
 		checkIn: date
 		checkOut: date
 	}
 	command bookRoom["Book Room"] {
 		email: string
-		roomId: UUID
+		roomNumber: int
 		checkIn: date
 		checkOut: date
 	}
-		reads [ra, booked, checkedOut] by roomId
+		reads [roomAdded, booked, checkedOut] by roomNumber
 		reads [Registered] by email
 	domainEvent booked["Room Booked"] {
 		*bookingId: UUID
-		*roomId: UUID
+		*roomNumber: int
 		email: string
 		checkIn: date
 		checkOut: date
@@ -90,23 +89,21 @@ eventModel
 		bookRoom-->booked
 
 	readModel cleaning_schedule["Cleaning Schedule"] {
-		*roomId: UUID
-		roomNumber: int
+		*roomNumber: int
 		guestCheckOut: date
 		cleaningStatus: string
 	}
 	ui:Manager maintenance_ui["Maintenance UI"] {
-		roomId: UUID
 		roomNumber: int
 		cleaningStatus: string
 	}
 	command readyRoom["Ready Room"] {
-		roomId: UUID
+		roomNumber: int
 		cleanedBy: string
 	}
-		reads [ra, checkedOut, ready] by roomId
+		reads [roomAdded, checkedOut, ready] by roomNumber
 	domainEvent ready["Room Readied"] {
-		*roomId: UUID
+		*roomNumber: int
 		readiedAt: timestamp
 	}
 	slice view_cleaning_schedule["View Cleaning Schedule"]
@@ -129,7 +126,7 @@ eventModel
 	domainEvent checkedIn["Checked In"] {
 		*bookingId: UUID
 		*email: string
-		roomId: UUID
+		roomNumber: int
 		checkedInAt: timestamp
 	}
 	readModel guestRoster["Guest Roster"] {
@@ -168,7 +165,7 @@ eventModel
 		reads [checkedIn, checkedOut] by bookingId
 	domainEvent checkedOut["Checked Out"] {
 		*bookingId: UUID
-		*roomId: UUID
+		*roomNumber: int
 		*email: string
 		checkedOutAt: timestamp
 	}

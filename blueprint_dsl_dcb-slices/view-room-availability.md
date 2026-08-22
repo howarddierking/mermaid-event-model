@@ -11,28 +11,26 @@
 ```mermaid
 eventModel
 	actor Guest
-	domainEvent ra["Room Added"] {
-		*roomId: UUID
+	domainEvent roomAdded["Room Added"] {
 		*roomNumber: int
 		floor: int
 		roomType: string
 		capacity: int
 	}
 	readModel avail["Room Availability"] {
-		*roomId: UUID
-		roomNumber: int
+		*roomNumber: int
 		roomType: string
 		isAvailable: boolean
 		nextCheckIn: date
 	}
 	ui:Guest booking_ui["Booking Screen"] {
-		roomId: UUID
+		roomNumber: int
 		roomType: string
 		checkIn: date
 		checkOut: date
 	}
 	slice view_room_availability["View Room Availability"]
-		ra-->avail
+		roomAdded-->avail
 		avail-->booking_ui
 ```
 

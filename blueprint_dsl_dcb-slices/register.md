@@ -16,11 +16,12 @@ eventModel
 		email: string
 		password: string
 	}
-	command Register reads [Registered] {
+	command Register {
 		name: string
 		email: string
 		password: string
 	}
+		reads [Registered] by email
 	domainEvent Registered {
 		*email: string
 		name: string
@@ -33,7 +34,9 @@ eventModel
 
 ## Description
 
-_Describe the high-level intent of this slice in prose. What user-visible capability does it represent? Why does it matter? When does it run, and what constraint or invariant does it preserve?_
+A prospective Guest adds themselves as a new user of the system through the Registration UI by supplying `name`, `email`, and `password`. The `Register` command reads prior `Registered` events (DCB consistency boundary, resolved on the `email` axis — the only tag axis `Registered` declares) to enforce that an email address identifies exactly one guest; a second registration for an address already on file is rejected with `guest-already-registered`. On success the system emits a `Registered` event carrying the guest's `email` (the identity every downstream slice keys on), their `name`, and a `registeredAt` timestamp. The submitted `password` is a credential, not domain state, and is deliberately absent from the event.
+
+This slice runs once per guest, at the front door: it is the prerequisite for booking, since `Book Room` reads `Registered` by `email` to confirm the booker exists. The preserved invariant is **at most one guest per `email`**.
 
 ## Tests
 
