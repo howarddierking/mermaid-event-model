@@ -130,7 +130,9 @@
   .codegen-bar button:disabled { opacity: 0.55; cursor: default; }
   .codegen-bar button.primary { background: #1e3a8a; color: #fff; border-color: #1e3a8a; }
   .codegen-bar button.primary:hover { background: #1e40af; }
-  .codegen-output {
+  /* Qualified with .content so these win over the base `.content pre` rule
+     (which would otherwise force a light background onto this <pre>). */
+  .content pre.codegen-output {
     margin: 0;
     padding: 14px 16px;
     background: #0f172a;
@@ -142,8 +144,9 @@
     overflow: auto;
     white-space: pre;
     tab-size: 2;
+    border: none;
   }
-  .codegen-output.empty {
+  .content pre.codegen-output.empty {
     color: #94a3b8;
     font-style: italic;
     white-space: normal;
