@@ -12,8 +12,8 @@
 eventModel
 	actor Manager
 	domainEvent paymentSucceeded["Payment Succeeded"] {
-		paymentId: UUID
-		bookingId: UUID
+		*paymentId: UUID
+		*bookingId: UUID
 		amount: decimal
 		transactionRef: string
 		succeededAt: timestamp

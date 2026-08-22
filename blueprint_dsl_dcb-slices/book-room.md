@@ -17,16 +17,18 @@ eventModel
 		checkIn: date
 		checkOut: date
 	}
-	command bookRoom["Book Room"] reads [Registered, ra, booked, checkedOut] {
-		guestId: UUID
+	command bookRoom["Book Room"] {
+		email: string
 		roomId: UUID
 		checkIn: date
 		checkOut: date
 	}
+		reads [ra, booked, checkedOut] by roomId
+		reads [Registered] by email
 	domainEvent booked["Room Booked"] {
-		bookingId: UUID
-		guestId: UUID
-		roomId: UUID
+		*bookingId: UUID
+		*roomId: UUID
+		email: string
 		checkIn: date
 		checkOut: date
 		bookedAt: timestamp

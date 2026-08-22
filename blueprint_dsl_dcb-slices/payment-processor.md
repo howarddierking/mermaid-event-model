@@ -12,7 +12,7 @@
 eventModel
 	actor Guest
 	readModel paymentsToProcess["Payments to Process"] {
-		paymentId: UUID
+		*paymentId: UUID
 		bookingId: UUID
 		amount: decimal
 		currency: string
@@ -20,14 +20,15 @@ eventModel
 		status: string
 	}
 	automation:Guest paymentProcessor["Payment Processor"]
-	command submitPayment["Submit Payment"] reads [paymentRequested, paymentSubmitted] {
+	command submitPayment["Submit Payment"] {
 		paymentId: UUID
 		amount: decimal
 		currency: string
 		paymentMethod: string
 	}
+		reads [paymentRequested, paymentSubmitted] by paymentId
 	domainEvent paymentSubmitted["Payment Submitted"] {
-		paymentId: UUID
+		*paymentId: UUID
 		bookingId: UUID
 		amount: decimal
 		submittedAt: timestamp

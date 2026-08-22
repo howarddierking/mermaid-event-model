@@ -105,6 +105,7 @@ eventModel
 
     ui:<Actor>            <id>["Label"]
     command               <id>["Label"] [reads [<event>, ...]]
+        reads [<event>, ...] by <axis>          (further boundary branches)
     domainEvent[:<Agg>]   <id>["Label"]
     externalEvent         <id>["Label"]
     readModel             <id>["Label"]
@@ -119,7 +120,7 @@ eventModel
 - **actor** — declares a top swimlane (e.g. `Manager`, `Guest`).
 - **aggregate** — declares a bottom swimlane representing a bounded context (e.g. `Inventory`, `Payment`). Optional; omit when modeling DCB-style.
 - **ui** — a screen owned by an actor; placed in that actor's lane.
-- **command** — an intent issued from a UI or automation; placed in the Time lane.
+- **command** — an intent issued from a UI or automation; placed in the Time lane. Its `reads` clauses declare the consistency boundary — see "Tag axes and boundaries" below.
 - **domainEvent** — a fact emitted by an aggregate; placed in that aggregate's lane. If the `:<Aggregate>` qualifier is omitted, the event lands in a synthesized `Events` lane below `Time`.
 - **externalEvent** — a fact originating outside the system (e.g. a webhook from a third-party service or a partner integration). Placed in a synthesized `External` lane at the very top of the diagram, above all actor lanes. Rendered with a pale-yellow fill to distinguish from internal domain events.
 - **readModel** — a projection read by UIs or automations; placed in the Time lane.
@@ -142,6 +143,52 @@ command bookRoom["Book Room"] {
 ```
 
 Supported types: `string`, `int`, `float`, `decimal`, `boolean`, `date`, `timestamp`, `UUID`.
+
+### Tag axes and boundaries
+
+A field may carry a leading `*`, marking it a **tag axis**: an independent handle a
+decision can scope its consistency boundary to.
+
+```
+domainEvent booked["Room Booked"] {
+    *bookingId: UUID
+    *roomId: UUID
+    email: string
+    checkIn: date
+}
+```
+
+An event carries zero to N axes and they are **independent** — they never compose
+into a key. `booked` above is findable by booking *or* by room. On a `readModel`,
+`*` marks the row key instead, and there multiple `*` do compose, because a row is
+one thing.
+
+A command's boundary is an **OR of branches**, each pairing one axis with the event
+types read on it:
+
+```
+command bookRoom["Book Room"] {
+    email: string
+    roomId: UUID
+}
+    reads [ra, booked, checkedOut] by roomId
+    reads [Registered] by email
+```
+
+The axis name refers to a field on the command *and* to a `*` field on every event
+in that branch. Branches are OR'd; the bracketed form `by [roomId, email]` AND's
+axes within a single branch, narrowing to their intersection.
+
+When exactly one axis is common to the command and every event in the branch, `by`
+is derived and the short form still works:
+
+```
+command Register reads [Registered] { … }
+```
+
+More than one candidate axis is an error, not a guess — write the `by` explicitly.
+Reading an event on an axis it does not declare would silently match nothing, so
+that is an error too.
 
 The renderer draws these as a two-section node: the label on top, a divider, and the field list below. Clicking a node with fields collapses or expands the data section. Node width is automatically sized to fit the widest label or field text.
 
@@ -214,6 +261,19 @@ test["Reject duplicate room number"]
 ```
 
 Errors render as red boxes (`#f87171` fill, `#7f1d1d` stroke), distinct from any other kind so a glance tells you "this test asserts a rejection." Downstream code generation reads the message verbatim: each `error[...]` maps to throwing the target framework's domain exception with the message used unchanged, so the test's rejection assertion stays a one-line mapping from the DSL.
+
+An error may also carry a **stable code** between the kind and the label:
+
+```
+        error guest-already-registered["A guest cannot be registered more than once"]
+```
+
+The code is the machine-branchable identifier a client keys on; the label is prose
+that can be reworded or translated without breaking anyone. Codes are all-hyphen
+lowercase, and generation derives the exception type from them
+(`guest-already-registered` → `GuestAlreadyRegistered`). The code is optional, so
+existing specs keep parsing — but without it a generator has to invent one, and
+inventing it from the message means rewording the message silently breaks clients.
 
 ### Authoring tests in slice spec files
 

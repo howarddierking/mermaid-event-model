@@ -11,14 +11,17 @@
 ```mermaid
 eventModel
 	externalEvent positionUpdated["Position Updated"] {
-		guestId: UUID
+		email: string
 		latitude: float
 		longitude: float
 		timestamp: timestamp
 	}
-	command hotelProximityTranslator["Hotel Proximity Translator"] reads [checkedIn, checkedOut]
+	command hotelProximityTranslator["Hotel Proximity Translator"] {
+		email: string
+	}
+		reads [checkedIn, checkedOut] by email
 	domainEvent guestLeft["Guest Left Hotel"] {
-		guestId: UUID
+		email: string
 		departedAt: timestamp
 	}
 	slice hotel_proximity_translator["Hotel Proximity Translator"]

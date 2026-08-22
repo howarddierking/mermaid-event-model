@@ -11,15 +11,15 @@
 ```mermaid
 eventModel
 	domainEvent paymentRequested["Payment Requested"] {
-		paymentId: UUID
-		bookingId: UUID
+		*paymentId: UUID
+		*bookingId: UUID
 		amount: decimal
 		currency: string
 		paymentMethod: string
 		requestedAt: timestamp
 	}
 	readModel paymentsToProcess["Payments to Process"] {
-		paymentId: UUID
+		*paymentId: UUID
 		bookingId: UUID
 		amount: decimal
 		currency: string

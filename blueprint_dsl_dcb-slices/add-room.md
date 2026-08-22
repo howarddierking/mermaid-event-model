@@ -17,15 +17,16 @@ eventModel
 		roomType: string
 		capacity: int
 	}
-	command addRoom["Add Room"] reads [ra] {
+	command addRoom["Add Room"] {
 		roomNumber: int
 		floor: int
 		roomType: string
 		capacity: int
 	}
+		reads [ra] by roomNumber
 	domainEvent ra["Room Added"] {
-		roomId: UUID
-		roomNumber: int
+		*roomId: UUID
+		*roomNumber: int
 		floor: int
 		roomType: string
 		capacity: int

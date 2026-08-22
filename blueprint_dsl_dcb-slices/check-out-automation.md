@@ -12,22 +12,21 @@
 eventModel
 	actor Manager
 	readModel guestRoster["Guest Roster"] {
-		guestId: UUID
+		*email: string
 		guestName: string
 		roomNumber: int
 		checkedInAt: timestamp
 		isPresent: boolean
 	}
 	automation:Manager checkOutAutomation["Check-out Automation"]
-	command checkOut["Checked Out"] reads [checkedIn, checkedOut] {
+	command checkOut["Checked Out"] {
 		bookingId: UUID
-		guestId: UUID
-		roomId: UUID
 	}
+		reads [checkedIn, checkedOut] by bookingId
 	domainEvent checkedOut["Checked Out"] {
-		bookingId: UUID
-		guestId: UUID
-		roomId: UUID
+		*bookingId: UUID
+		*roomId: UUID
+		*email: string
 		checkedOutAt: timestamp
 	}
 	slice check_out_automation["Check-out Automation"]

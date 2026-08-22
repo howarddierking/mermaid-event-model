@@ -16,12 +16,13 @@ eventModel
 		roomNumber: int
 		cleaningStatus: string
 	}
-	command readyRoom["Ready Room"] reads [ra, checkedOut, ready] {
+	command readyRoom["Ready Room"] {
 		roomId: UUID
 		cleanedBy: string
 	}
+		reads [ra, checkedOut, ready] by roomId
 	domainEvent ready["Room Readied"] {
-		roomId: UUID
+		*roomId: UUID
 		readiedAt: timestamp
 	}
 	slice ready_room["Ready Room"]

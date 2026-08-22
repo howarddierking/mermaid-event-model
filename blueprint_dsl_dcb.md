@@ -20,9 +20,8 @@ eventModel
 		password: string
 	}
 	domainEvent Registered {
-		guestId: UUID
+		*email: string
 		name: string
-		email: string
 		registeredAt: timestamp
 	}
 	slice register["Register"]
@@ -35,21 +34,22 @@ eventModel
 		roomType: string
 		capacity: int
 	}
-	command addRoom["Add Room"] reads [ra] {
+	command addRoom["Add Room"] {
 		roomNumber: int
 		floor: int
 		roomType: string
 		capacity: int
 	}
+		reads [ra] by roomNumber
 	domainEvent ra["Room Added"] {
-		roomId: UUID
-		roomNumber: int
+		*roomId: UUID
+		*roomNumber: int
 		floor: int
 		roomType: string
 		capacity: int
 	}
 	readModel avail["Room Availability"] {
-		roomId: UUID
+		*roomId: UUID
 		roomNumber: int
 		roomType: string
 		isAvailable: boolean
@@ -69,16 +69,18 @@ eventModel
 		checkIn: date
 		checkOut: date
 	}
-	command bookRoom["Book Room"] reads [Registered, ra, booked, checkedOut] {
-		guestId: UUID
+	command bookRoom["Book Room"] {
+		email: string
 		roomId: UUID
 		checkIn: date
 		checkOut: date
 	}
+		reads [ra, booked, checkedOut] by roomId
+		reads [Registered] by email
 	domainEvent booked["Room Booked"] {
-		bookingId: UUID
-		guestId: UUID
-		roomId: UUID
+		*bookingId: UUID
+		*roomId: UUID
+		email: string
 		checkIn: date
 		checkOut: date
 		bookedAt: timestamp
@@ -88,7 +90,7 @@ eventModel
 		bookRoom-->booked
 
 	readModel cleaning_schedule["Cleaning Schedule"] {
-		roomId: UUID
+		*roomId: UUID
 		roomNumber: int
 		guestCheckOut: date
 		cleaningStatus: string
@@ -98,12 +100,13 @@ eventModel
 		roomNumber: int
 		cleaningStatus: string
 	}
-	command readyRoom["Ready Room"] reads [ra, checkedOut, ready] {
+	command readyRoom["Ready Room"] {
 		roomId: UUID
 		cleanedBy: string
 	}
+		reads [ra, checkedOut, ready] by roomId
 	domainEvent ready["Room Readied"] {
-		roomId: UUID
+		*roomId: UUID
 		readiedAt: timestamp
 	}
 	slice view_cleaning_schedule["View Cleaning Schedule"]
@@ -119,18 +122,18 @@ eventModel
 		guestName: string
 		roomNumber: int
 	}
-	command checkin["Check-in"] reads [booked, checkedIn] {
+	command checkin["Check-in"] {
 		bookingId: UUID
-		guestId: UUID
 	}
+		reads [booked, checkedIn] by bookingId
 	domainEvent checkedIn["Checked In"] {
-		bookingId: UUID
-		guestId: UUID
+		*bookingId: UUID
+		*email: string
 		roomId: UUID
 		checkedInAt: timestamp
 	}
 	readModel guestRoster["Guest Roster"] {
-		guestId: UUID
+		*email: string
 		guestName: string
 		roomNumber: int
 		checkedInAt: timestamp
@@ -141,14 +144,17 @@ eventModel
 		checkin-->checkedIn
 
 	externalEvent positionUpdated["Position Updated"] {
-		guestId: UUID
+		email: string
 		latitude: float
 		longitude: float
 		timestamp: timestamp
 	}
-	command hotelProximityTranslator["Hotel Proximity Translator"] reads [checkedIn, checkedOut]
+	command hotelProximityTranslator["Hotel Proximity Translator"] {
+		email: string
+	}
+		reads [checkedIn, checkedOut] by email
 	domainEvent guestLeft["Guest Left Hotel"] {
-		guestId: UUID
+		email: string
 		departedAt: timestamp
 	}
 	slice hotel_proximity_translator["Hotel Proximity Translator"]
@@ -156,15 +162,14 @@ eventModel
 		hotelProximityTranslator-->guestLeft
 
 	automation:Manager checkOutAutomation["Check-out Automation"]
-	command checkOut["Checked Out"] reads [checkedIn, checkedOut] {
+	command checkOut["Checked Out"] {
 		bookingId: UUID
-		guestId: UUID
-		roomId: UUID
 	}
+		reads [checkedIn, checkedOut] by bookingId
 	domainEvent checkedOut["Checked Out"] {
-		bookingId: UUID
-		guestId: UUID
-		roomId: UUID
+		*bookingId: UUID
+		*roomId: UUID
+		*email: string
 		checkedOutAt: timestamp
 	}
 	slice feed_checked_in["Feed: Checked In"]
@@ -184,22 +189,23 @@ eventModel
 		currency: string
 		paymentMethod: string
 	}
-	command pay["Pay"] reads [booked, paymentRequested, paymentSucceeded] {
+	command pay["Pay"] {
 		bookingId: UUID
 		amount: decimal
 		currency: string
 		paymentMethod: string
 	}
+		reads [booked, paymentRequested, paymentSucceeded] by bookingId
 	domainEvent paymentRequested["Payment Requested"] {
-		paymentId: UUID
-		bookingId: UUID
+		*paymentId: UUID
+		*bookingId: UUID
 		amount: decimal
 		currency: string
 		paymentMethod: string
 		requestedAt: timestamp
 	}
 	readModel paymentsToProcess["Payments to Process"] {
-		paymentId: UUID
+		*paymentId: UUID
 		bookingId: UUID
 		amount: decimal
 		currency: string
@@ -211,14 +217,15 @@ eventModel
 		pay-->paymentRequested
 
 	automation:Guest paymentProcessor["Payment Processor"]
-	command submitPayment["Submit Payment"] reads [paymentRequested, paymentSubmitted] {
+	command submitPayment["Submit Payment"] {
 		paymentId: UUID
 		amount: decimal
 		currency: string
 		paymentMethod: string
 	}
+		reads [paymentRequested, paymentSubmitted] by paymentId
 	domainEvent paymentSubmitted["Payment Submitted"] {
-		paymentId: UUID
+		*paymentId: UUID
 		bookingId: UUID
 		amount: decimal
 		submittedAt: timestamp
@@ -242,13 +249,14 @@ eventModel
 		transactionRef: string
 		confirmedAt: timestamp
 	}
-	command processPayment["Process Payment"] reads [paymentSubmitted, paymentSucceeded] {
+	command processPayment["Process Payment"] {
 		paymentId: UUID
 		gatewayRef: string
 	}
+		reads [paymentSubmitted, paymentSucceeded] by paymentId
 	domainEvent paymentSucceeded["Payment Succeeded"] {
-		paymentId: UUID
-		bookingId: UUID
+		*paymentId: UUID
+		*bookingId: UUID
 		amount: decimal
 		transactionRef: string
 		succeededAt: timestamp

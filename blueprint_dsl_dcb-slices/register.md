@@ -22,9 +22,8 @@ eventModel
 		password: string
 	}
 	domainEvent Registered {
-		guestId: UUID
+		*email: string
 		name: string
-		email: string
 		registeredAt: timestamp
 	}
 	slice register["Register"]
@@ -62,5 +61,5 @@ sliceTests
 				email: string = "ada@example.com"
 			}
 		then
-			error["A guest cannot be registered more than once"]
+			error guest-already-registered["A guest cannot be registered more than once"]
 ```

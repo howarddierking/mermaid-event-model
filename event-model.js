@@ -61,7 +61,14 @@ function parseEventModel(src) {
   const edgeRe = /^(\w+)\s*-->\s*(\w+)$/;
   const actorRe = /^actor\s+(\w+)$/;
   const aggRe = /^aggregate\s+(\w+)$/;
-  const fieldRe = /^(\w+)\s*:\s*(\w+)$/;
+  // A leading `*` marks the field as a tag axis: an independent handle a
+  // decision may scope its consistency boundary to. An event carries zero to N
+  // of them and they never compose into a key — composition happens command-side.
+  const fieldRe = /^(\*)?\s*(\w+)\s*:\s*(\w+)$/;
+  // `reads [a, b] by axis` — one branch of a boundary. Branches are OR'd; the
+  // bracketed `by [x, y]` form AND's axes within a single branch.
+  const readsClauseRe =
+    /^reads\s*\[([^\]]*)\]\s*(?:by\s*(?:\[([^\]]*)\]|(\w+)))?\s*$/;
   const sliceRe = /^slice\s+(\w+)(?:\s*\["([^"]*)"\])?\s*$/;
 
   const actors = [];
@@ -115,13 +122,36 @@ function parseEventModel(src) {
           i++;
           if (fl === "}") break;
           const fm = fl.match(fieldRe);
-          if (fm) fields.push({ name: fm[1], type: fm[2] });
+          if (fm) fields.push({ name: fm[2], type: fm[3], axis: !!fm[1] });
         }
       }
-      const reads = readsList
-        ? readsList.split(",").map((s) => s.trim()).filter(Boolean)
-        : [];
-      elements.push({ id, kind, lane: lane || null, label: label || id, fields, reads });
+      // A boundary is an OR of branches. The inline `reads [...]` form is a
+      // single branch whose axis is derived; each following indented
+      // `reads [...] by <axis>` line adds a further branch explicitly.
+      const readBranches = [];
+      if (readsList) {
+        readBranches.push({
+          events: readsList.split(",").map((s) => s.trim()).filter(Boolean),
+          axes: [],
+        });
+      }
+      while (i < lines.length) {
+        const nextRaw = lines[i];
+        const nextLine = nextRaw.trim();
+        if (!nextLine) { i++; continue; }
+        if (indentOf(nextRaw) <= lineIndent) break;
+        const rm = nextLine.match(readsClauseRe);
+        if (!rm) break;
+        readBranches.push({
+          events: rm[1].split(",").map((s) => s.trim()).filter(Boolean),
+          axes: (rm[2] ?? rm[3] ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+        });
+        i++;
+      }
+      // `reads` remains the flat union of every branch's event ids: it is what
+      // the renderer draws as tags, and what add-slices ignores for layout.
+      const reads = [...new Set(readBranches.flatMap((b) => b.events))];
+      elements.push({ id, kind, lane: lane || null, label: label || id, fields, reads, readBranches });
       continue;
     }
     if ((m = line.match(edgeRe))) {
@@ -132,6 +162,14 @@ function parseEventModel(src) {
   }
 
   return { actors, aggregates, elements, edges, slices };
+}
+
+// A data-section field's display text. A leading `*` marks a tag axis — an
+// independent handle a decision may scope its consistency boundary to. Shown
+// because choosing the wrong one is the most expensive mistake in a DCB model
+// and it should be visible on the diagram, not buried in the source.
+function fieldText(f) {
+  return `${f.axis ? "*" : ""}${f.name}: ${f.type}`;
 }
 
 function computeRanks(elements, edges) {
@@ -444,7 +482,7 @@ function layoutEventModel(model) {
     let maxFieldW = 0;
     if (el.fields && el.fields.length > 0) {
       for (const f of el.fields) {
-        const fw = (f.name.length + 2 + f.type.length) * FIELD_CHAR_W + FIELD_PAD;
+        const fw = fieldText(f).length * FIELD_CHAR_W + FIELD_PAD;
         if (fw > maxFieldW) maxFieldW = fw;
       }
     }
@@ -1004,7 +1042,8 @@ export function drawInto(svg, model, L) {
         .attr("y", 4 + (i + 1) * FIELD_LINE_H - 3)
         .attr("fill", "#374151")
         .attr("font-size", 10)
-        .text(`${f.name}: ${f.type}`);
+        .attr("font-weight", f.axis ? 600 : null)
+        .text(fieldText(f));
     });
   });
 

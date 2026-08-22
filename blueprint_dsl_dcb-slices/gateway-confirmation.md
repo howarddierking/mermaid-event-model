@@ -15,13 +15,14 @@ eventModel
 		transactionRef: string
 		confirmedAt: timestamp
 	}
-	command processPayment["Process Payment"] reads [paymentSubmitted, paymentSucceeded] {
+	command processPayment["Process Payment"] {
 		paymentId: UUID
 		gatewayRef: string
 	}
+		reads [paymentSubmitted, paymentSucceeded] by paymentId
 	domainEvent paymentSucceeded["Payment Succeeded"] {
-		paymentId: UUID
-		bookingId: UUID
+		*paymentId: UUID
+		*bookingId: UUID
 		amount: decimal
 		transactionRef: string
 		succeededAt: timestamp

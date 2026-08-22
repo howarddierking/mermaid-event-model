@@ -11,7 +11,7 @@
 ```mermaid
 eventModel
 	readModel paymentsToProcess["Payments to Process"] {
-		paymentId: UUID
+		*paymentId: UUID
 		bookingId: UUID
 		amount: decimal
 		currency: string
@@ -19,7 +19,7 @@ eventModel
 		status: string
 	}
 	domainEvent paymentSubmitted["Payment Submitted"] {
-		paymentId: UUID
+		*paymentId: UUID
 		bookingId: UUID
 		amount: decimal
 		submittedAt: timestamp
