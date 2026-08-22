@@ -65,30 +65,6 @@
   }
   .content pre.mermaid svg { display: block; }
 
-  /* Export toolbar shown above each rendered diagram */
-  .diagram-wrap { position: relative; }
-  .export-toolbar {
-    display: flex;
-    gap: 8px;
-    margin: 0 0 6px;
-  }
-  .export-toolbar button {
-    font: inherit;
-    font-size: 12px;
-    line-height: 1;
-    padding: 6px 12px;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    background: #fff;
-    color: #1f2937;
-    cursor: pointer;
-    transition: background 0.12s, border-color 0.12s;
-  }
-  .export-toolbar button:hover { background: #f3f4f6; border-color: #9ca3af; }
-  .export-toolbar button:active { background: #e5e7eb; }
-  .export-toolbar button:disabled { opacity: 0.55; cursor: default; }
-  .export-toolbar button svg { vertical-align: -2px; margin-right: 4px; }
-
   /* Code generation panel (one per slice, shown at the top of the content) */
   .codegen {
     margin: 0 0 24px;
@@ -153,44 +129,6 @@
     background: #f8fafc;
   }
 
-  /* Interactive slice filter shown above a diagram that declares slices */
-  .slice-filter {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    margin: 0 0 10px;
-  }
-  .slice-filter .slice-filter-label {
-    font-size: 11px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: #6b7280;
-    margin-right: 2px;
-  }
-  .slice-filter button {
-    font: inherit;
-    font-size: 12px;
-    line-height: 1;
-    padding: 5px 10px;
-    border: 1px solid #d1d5db;
-    border-radius: 999px;
-    background: #fff;
-    color: #334155;
-    cursor: pointer;
-    transition: background 0.12s, border-color 0.12s, color 0.12s;
-  }
-  .slice-filter button:hover { background: #f3f4f6; border-color: #9ca3af; }
-  .slice-filter button.active {
-    background: #1e3a8a;
-    border-color: #1e3a8a;
-    color: #fff;
-  }
-  .slice-filter button.all-btn.active {
-    background: #334155;
-    border-color: #334155;
-  }
-
   .empty { color: #6b7280; font-style: italic; margin-top: 40px; text-align: center; }
   .error {
     color: #991b1b;
@@ -208,8 +146,7 @@
   "imports": {
     "d3": "https://cdn.jsdelivr.net/npm/d3@7/+esm",
     "mermaid": "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs",
-    "marked": "https://cdn.jsdelivr.net/npm/marked@15/+esm",
-    "jspdf": "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm"
+    "marked": "https://cdn.jsdelivr.net/npm/marked@15/+esm"
   }
 }
 </script>
@@ -232,329 +169,10 @@
 import mermaid from 'mermaid';
 import { marked } from 'marked';
 import diagramDefinitions from './index.js';
-import { listSliceIds, applySliceFilter } from './event-model.js';
 import { generateFromSource } from './codegen.js';
 
 await mermaid.registerExternalDiagrams(diagramDefinitions);
 mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
-
-// ─────────────────────────────────────────────────────────────────────────
-// Diagram export (PNG / PDF) — runs entirely client-side.
-//
-// The renderer emits <image href="settings.png"> for automation nodes.
-// Browsers refuse to load external resources referenced inside an SVG that
-// is rasterized via an <img>, so we inline settings.png as a data URI in a
-// clone before drawing to a canvas. Rasterizing at 2x keeps text crisp.
-// ─────────────────────────────────────────────────────────────────────────
-const EXPORT_SCALE = 2;
-let settingsIconDataUrl = null;
-
-async function getSettingsIconDataUrl() {
-  if (settingsIconDataUrl !== null) return settingsIconDataUrl;
-  try {
-    const res = await fetch('./settings.png', { cache: 'force-cache' });
-    const blob = await res.blob();
-    settingsIconDataUrl = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  } catch (_) {
-    settingsIconDataUrl = ''; // give up gracefully; icons just won't appear
-  }
-  return settingsIconDataUrl;
-}
-
-// Determine the intrinsic pixel size of an SVG from its width/height or viewBox.
-function svgSize(svg) {
-  const w = parseFloat(svg.getAttribute('width'));
-  const h = parseFloat(svg.getAttribute('height'));
-  if (w && h) return { width: w, height: h };
-  const vb = (svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
-  if (vb.length === 4 && vb[2] && vb[3]) return { width: vb[2], height: vb[3] };
-  const rect = svg.getBoundingClientRect();
-  return { width: rect.width || 800, height: rect.height || 600 };
-}
-
-// Clone the SVG, inline the automation icon, and return { blobUrl, width, height }.
-async function svgToImageSource(svg) {
-  const { width, height } = svgSize(svg);
-  const clone = svg.cloneNode(true);
-  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-  clone.setAttribute('width', width);
-  clone.setAttribute('height', height);
-  if (!clone.getAttribute('viewBox')) {
-    clone.setAttribute('viewBox', `0 0 ${width} ${height}`);
-  }
-
-  // Inline the automation gear icon so it survives rasterization.
-  const images = clone.querySelectorAll('image');
-  if (images.length > 0) {
-    const dataUrl = await getSettingsIconDataUrl();
-    if (dataUrl) {
-      images.forEach((img) => {
-        img.setAttribute('href', dataUrl);
-        img.setAttributeNS('http://www.w3.org/1999/xlink', 'href', dataUrl);
-      });
-    }
-  }
-
-  // White backdrop so PNG/PDF aren't transparent.
-  const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-  bg.setAttribute('x', 0);
-  bg.setAttribute('y', 0);
-  bg.setAttribute('width', width);
-  bg.setAttribute('height', height);
-  bg.setAttribute('fill', '#ffffff');
-  clone.insertBefore(bg, clone.firstChild);
-
-  const xml = new XMLSerializer().serializeToString(clone);
-  const blob = new Blob(['<?xml version="1.0" encoding="UTF-8"?>\n' + xml], {
-    type: 'image/svg+xml;charset=utf-8',
-  });
-  return { blobUrl: URL.createObjectURL(blob), width, height };
-}
-
-// Rasterize an SVG element to a canvas at EXPORT_SCALE.
-async function svgToCanvas(svg) {
-  const { blobUrl, width, height } = await svgToImageSource(svg);
-  try {
-    const img = await new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error('Failed to rasterize diagram'));
-      image.src = blobUrl;
-    });
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(width * EXPORT_SCALE);
-    canvas.height = Math.round(height * EXPORT_SCALE);
-    const ctx = canvas.getContext('2d');
-    ctx.setTransform(EXPORT_SCALE, 0, 0, EXPORT_SCALE, 0, 0);
-    ctx.drawImage(img, 0, 0, width, height);
-    return { canvas, width, height };
-  } finally {
-    URL.revokeObjectURL(blobUrl);
-  }
-}
-
-function triggerDownload(href, filename) {
-  const a = document.createElement('a');
-  a.href = href;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
-
-function exportBaseName(index) {
-  const base = activeFile === '__model' ? MODEL : activeFile.replace(/\.md$/, '');
-  return index > 0 ? `${base}-${index + 1}` : base;
-}
-
-async function exportPng(svg, index) {
-  const { canvas } = await svgToCanvas(svg);
-  const url = canvas.toDataURL('image/png');
-  triggerDownload(url, exportBaseName(index) + '.png');
-}
-
-async function exportPdf(svg, index) {
-  const { canvas, width, height } = await svgToCanvas(svg);
-  const { jsPDF } = await import('jspdf');
-  const orientation = width >= height ? 'landscape' : 'portrait';
-  // Size the PDF page to the diagram (in px units) so nothing is cropped.
-  const pdf = new jsPDF({ orientation, unit: 'px', format: [width, height] });
-  pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, width, height);
-  pdf.save(exportBaseName(index) + '.pdf');
-}
-
-// Build a code-generation panel for the active slice and insert it at the top
-// of the content. Codegen is per-slice (it needs both the eventModel and
-// sliceTests blocks), so there is exactly one panel, generated lazily on click.
-function attachCodegenPanel(container, src, sliceName) {
-  const panel = document.createElement('div');
-  panel.className = 'codegen';
-
-  const bar = document.createElement('div');
-  bar.className = 'codegen-bar';
-
-  const title = document.createElement('span');
-  title.className = 'codegen-title';
-  title.textContent = 'Code Generation';
-  bar.appendChild(title);
-
-  const genBtn = document.createElement('button');
-  genBtn.type = 'button';
-  genBtn.className = 'primary';
-  genBtn.textContent = 'Generate TypeScript';
-
-  const copyBtn = document.createElement('button');
-  copyBtn.type = 'button';
-  copyBtn.textContent = 'Copy';
-  copyBtn.disabled = true;
-
-  const dlBtn = document.createElement('button');
-  dlBtn.type = 'button';
-  dlBtn.textContent = 'Download .ts';
-  dlBtn.disabled = true;
-
-  bar.append(genBtn, copyBtn, dlBtn);
-
-  const output = document.createElement('pre');
-  output.className = 'codegen-output empty';
-  output.textContent = 'Click “Generate TypeScript” to scaffold types, a decider/projection, domain errors, and test stubs from this slice.';
-
-  panel.append(bar, output);
-  container.insertBefore(panel, container.firstChild);
-
-  let generated = null;
-  const fileBase = (sliceName || 'slice').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'slice';
-
-  const generate = () => {
-    const original = genBtn.textContent;
-    genBtn.disabled = true;
-    genBtn.textContent = 'Generating…';
-    try {
-      generated = generateFromSource(src, { sliceName });
-      output.textContent = generated;
-      output.classList.remove('empty');
-      copyBtn.disabled = false;
-      dlBtn.disabled = false;
-      genBtn.textContent = 'Regenerate';
-    } catch (err) {
-      console.error('codegen failed', err);
-      output.textContent = 'Code generation failed:\n' + (err && err.stack ? err.stack : String(err));
-      output.classList.remove('empty');
-      genBtn.textContent = original;
-    } finally {
-      genBtn.disabled = false;
-    }
-  };
-
-  genBtn.addEventListener('click', generate);
-
-  copyBtn.addEventListener('click', async () => {
-    if (generated == null) return;
-    const label = copyBtn.textContent;
-    try {
-      await navigator.clipboard.writeText(generated);
-      copyBtn.textContent = 'Copied';
-    } catch (_) {
-      // Fallback for environments without the async clipboard API.
-      const ta = document.createElement('textarea');
-      ta.value = generated;
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand('copy'); copyBtn.textContent = 'Copied'; }
-      catch { copyBtn.textContent = 'Copy failed'; }
-      ta.remove();
-    }
-    setTimeout(() => { copyBtn.textContent = label; }, 1400);
-  });
-
-  dlBtn.addEventListener('click', () => {
-    if (generated == null) return;
-    const blob = new Blob([generated], { type: 'text/x-typescript;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileBase + '.ts';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  });
-
-  return panel;
-}
-
-// Build an export toolbar for a rendered diagram and insert it above the SVG.
-function attachExportToolbar(pre, svg, index) {
-  if (pre.previousElementSibling?.classList?.contains('export-toolbar')) return;
-
-  const bar = document.createElement('div');
-  bar.className = 'export-toolbar';
-
-  const mkBtn = (label, handler) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = label;
-    btn.addEventListener('click', async () => {
-      const original = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = 'Exporting…';
-      try {
-        await handler();
-        btn.textContent = original;
-      } catch (err) {
-        console.error('export failed', err);
-        btn.textContent = 'Failed';
-        setTimeout(() => { btn.textContent = original; }, 1600);
-      } finally {
-        btn.disabled = false;
-      }
-    });
-    return btn;
-  };
-
-  bar.appendChild(mkBtn('Export PNG', () => exportPng(svg, index)));
-  bar.appendChild(mkBtn('Export PDF', () => exportPdf(svg, index)));
-  pre.parentNode.insertBefore(bar, pre);
-}
-
-// Build an interactive slice-filter toolbar for a rendered diagram and insert
-// it above the SVG. Reads the slices straight from the rendered SVG (via the
-// data attributes drawInto stamps), so it works for any loaded model and needs
-// no knowledge of the DSL. Selecting one or more slices dims everything that
-// isn't part of the selection; "All" clears the filter. No-op for diagrams
-// that declare no slices (e.g. sliceTests diagrams).
-function attachSliceFilter(pre, svg) {
-  const slices = listSliceIds(svg);
-  if (slices.length === 0) return;
-
-  const bar = document.createElement('div');
-  bar.className = 'slice-filter';
-
-  const label = document.createElement('span');
-  label.className = 'slice-filter-label';
-  label.textContent = 'Slices';
-  bar.appendChild(label);
-
-  // The set of currently-selected slice ids. Empty means "show all".
-  const active = new Set();
-  const buttons = [];
-
-  const sync = () => {
-    applySliceFilter(svg, active);
-    allBtn.classList.toggle('active', active.size === 0);
-    for (const { el, id } of buttons) {
-      el.classList.toggle('active', active.has(id));
-    }
-  };
-
-  const allBtn = document.createElement('button');
-  allBtn.type = 'button';
-  allBtn.className = 'all-btn active';
-  allBtn.textContent = 'All';
-  allBtn.addEventListener('click', () => { active.clear(); sync(); });
-  bar.appendChild(allBtn);
-
-  for (const { id, label: sliceLabel } of slices) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = sliceLabel;
-    btn.title = id;
-    btn.addEventListener('click', () => {
-      if (active.has(id)) active.delete(id);
-      else active.add(id);
-      sync();
-    });
-    buttons.push({ el: btn, id });
-    bar.appendChild(btn);
-  }
-
-  pre.parentNode.insertBefore(bar, pre);
-}
 
 // `model` is the base name; the conventions are:
 //   <model>.md          → the model overview file (one per model)
@@ -642,6 +260,108 @@ function renderSidebar(sliceFiles) {
   }
 }
 
+// Build a code-generation panel for the active slice and insert it at the top
+// of the content. Codegen is per-slice (it needs both the eventModel and
+// sliceTests blocks), so there is exactly one panel, generated lazily on click.
+function attachCodegenPanel(container, src, sliceName) {
+  const panel = document.createElement('div');
+  panel.className = 'codegen';
+
+  const bar = document.createElement('div');
+  bar.className = 'codegen-bar';
+
+  const title = document.createElement('span');
+  title.className = 'codegen-title';
+  title.textContent = 'Code Generation';
+  bar.appendChild(title);
+
+  const genBtn = document.createElement('button');
+  genBtn.type = 'button';
+  genBtn.className = 'primary';
+  genBtn.textContent = 'Generate Axon (Java)';
+
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.textContent = 'Copy';
+  copyBtn.disabled = true;
+
+  const dlBtn = document.createElement('button');
+  dlBtn.type = 'button';
+  dlBtn.textContent = 'Download .java';
+  dlBtn.disabled = true;
+
+  bar.append(genBtn, copyBtn, dlBtn);
+
+  const output = document.createElement('pre');
+  output.className = 'codegen-output empty';
+  output.textContent = 'Click “Generate Axon (Java)” to scaffold Axon Framework 5 commands, events, a DCB command handler (or projection), domain exceptions, and AxonTestFixture tests from this slice.';
+
+  panel.append(bar, output);
+  container.insertBefore(panel, container.firstChild);
+
+  let generated = null;
+  // Java files are conventionally PascalCase; derive one from the slice name.
+  const fileBase = ((sliceName || 'slice').replace(/[^a-z0-9]+/gi, ' ').trim().split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('')) || 'Slice';
+
+  const generate = () => {
+    const original = genBtn.textContent;
+    genBtn.disabled = true;
+    genBtn.textContent = 'Generating…';
+    try {
+      generated = generateFromSource(src, { sliceName });
+      output.textContent = generated;
+      output.classList.remove('empty');
+      copyBtn.disabled = false;
+      dlBtn.disabled = false;
+      genBtn.textContent = 'Regenerate';
+    } catch (err) {
+      console.error('codegen failed', err);
+      output.textContent = 'Code generation failed:\n' + (err && err.stack ? err.stack : String(err));
+      output.classList.remove('empty');
+      genBtn.textContent = original;
+    } finally {
+      genBtn.disabled = false;
+    }
+  };
+
+  genBtn.addEventListener('click', generate);
+
+  copyBtn.addEventListener('click', async () => {
+    if (generated == null) return;
+    const label = copyBtn.textContent;
+    try {
+      await navigator.clipboard.writeText(generated);
+      copyBtn.textContent = 'Copied';
+    } catch (_) {
+      // Fallback for environments without the async clipboard API.
+      const ta = document.createElement('textarea');
+      ta.value = generated;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); copyBtn.textContent = 'Copied'; }
+      catch { copyBtn.textContent = 'Copy failed'; }
+      ta.remove();
+    }
+    setTimeout(() => { copyBtn.textContent = label; }, 1400);
+  });
+
+  dlBtn.addEventListener('click', () => {
+    if (generated == null) return;
+    const blob = new Blob([generated], { type: 'text/x-java-source;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileBase + '.java';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  return panel;
+}
+
 async function loadAndRender() {
   let src;
   try {
@@ -671,18 +391,6 @@ async function loadAndRender() {
     } catch (err) {
       console.error('mermaid render error', err);
     }
-    // Add PNG/PDF export controls and the interactive slice filter to every
-    // diagram that rendered an SVG. Attaching the slice filter first and the
-    // export toolbar second yields the visual order: [slice filter] then
-    // [export toolbar] then [diagram]. The filter is a no-op for slice-less
-    // diagrams (e.g. sliceTests).
-    content.querySelectorAll('pre.mermaid').forEach((pre, i) => {
-      const svg = pre.querySelector('svg');
-      if (svg) {
-        attachSliceFilter(pre, svg);
-        attachExportToolbar(pre, svg, i);
-      }
-    });
 
     // Code generation is per-slice: show one panel at the top of the content
     // whenever the source declares an eventModel block (slice specs and the
