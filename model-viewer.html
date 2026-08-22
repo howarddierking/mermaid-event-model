@@ -65,6 +65,44 @@
   }
   .content pre.mermaid svg { display: block; }
 
+  /* Interactive slice filter shown above a diagram that declares slices */
+  .slice-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 10px;
+  }
+  .slice-filter .slice-filter-label {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #6b7280;
+    margin-right: 2px;
+  }
+  .slice-filter button {
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    padding: 5px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 999px;
+    background: #fff;
+    color: #334155;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+  }
+  .slice-filter button:hover { background: #f3f4f6; border-color: #9ca3af; }
+  .slice-filter button.active {
+    background: #1e3a8a;
+    border-color: #1e3a8a;
+    color: #fff;
+  }
+  .slice-filter button.all-btn.active {
+    background: #334155;
+    border-color: #334155;
+  }
+
   .empty { color: #6b7280; font-style: italic; margin-top: 40px; text-align: center; }
   .error {
     color: #991b1b;
@@ -105,9 +143,64 @@
 import mermaid from 'mermaid';
 import { marked } from 'marked';
 import diagramDefinitions from './index.js';
+import { listSliceIds, applySliceFilter } from './event-model.js';
 
 await mermaid.registerExternalDiagrams(diagramDefinitions);
 mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
+
+// Build an interactive slice-filter toolbar for a rendered diagram and insert
+// it above the SVG. Reads the slices straight from the rendered SVG (via the
+// data attributes drawInto stamps), so it works for any loaded model and needs
+// no knowledge of the DSL. Selecting one or more slices dims everything that
+// isn't part of the selection; "All" clears the filter. No-op for diagrams
+// that declare no slices (e.g. sliceTests diagrams).
+function attachSliceFilter(pre, svg) {
+  const slices = listSliceIds(svg);
+  if (slices.length === 0) return;
+
+  const bar = document.createElement('div');
+  bar.className = 'slice-filter';
+
+  const label = document.createElement('span');
+  label.className = 'slice-filter-label';
+  label.textContent = 'Slices';
+  bar.appendChild(label);
+
+  // The set of currently-selected slice ids. Empty means "show all".
+  const active = new Set();
+  const buttons = [];
+
+  const sync = () => {
+    applySliceFilter(svg, active);
+    allBtn.classList.toggle('active', active.size === 0);
+    for (const { el, id } of buttons) {
+      el.classList.toggle('active', active.has(id));
+    }
+  };
+
+  const allBtn = document.createElement('button');
+  allBtn.type = 'button';
+  allBtn.className = 'all-btn active';
+  allBtn.textContent = 'All';
+  allBtn.addEventListener('click', () => { active.clear(); sync(); });
+  bar.appendChild(allBtn);
+
+  for (const { id, label: sliceLabel } of slices) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = sliceLabel;
+    btn.title = id;
+    btn.addEventListener('click', () => {
+      if (active.has(id)) active.delete(id);
+      else active.add(id);
+      sync();
+    });
+    buttons.push({ el: btn, id });
+    bar.appendChild(btn);
+  }
+
+  pre.parentNode.insertBefore(bar, pre);
+}
 
 // `model` is the base name; the conventions are:
 //   <model>.md          → the model overview file (one per model)
@@ -224,6 +317,14 @@ async function loadAndRender() {
     } catch (err) {
       console.error('mermaid render error', err);
     }
+    // Add the interactive slice filter to every diagram that rendered an SVG.
+    // The filter is a no-op for slice-less diagrams (e.g. sliceTests).
+    content.querySelectorAll('pre.mermaid').forEach((pre) => {
+      const svg = pre.querySelector('svg');
+      if (svg) {
+        attachSliceFilter(pre, svg);
+      }
+    });
   }
 }
 

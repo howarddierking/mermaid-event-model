@@ -829,7 +829,11 @@ export function drawInto(svg, model, L) {
     .selectAll("g.slice")
     .data(L.slices || [], (d) => d.id)
     .join("g")
-    .attr("class", "slice");
+    .attr("class", "slice")
+    // The base slice id (shared across split clusters) so a host page can
+    // discover every slice in the diagram and drive interactive filtering.
+    .attr("data-slice-id", (d) => d.sliceId)
+    .attr("data-slice-label", (d) => d.label || d.sliceId);
 
   sliceG
     .append("rect")
@@ -900,12 +904,33 @@ export function drawInto(svg, model, L) {
     .map((el) => ({ el, ...L.pos.get(el.id) }))
     .filter((d) => d.x != null);
 
+  // Map each node id to the space-separated set of slice ids it belongs to,
+  // so slice membership is discoverable from the DOM for interactive
+  // filtering. A fan-in read model gets duplicated into stubs (id__dup_N);
+  // those inherit their original's slice membership so filtering a slice
+  // that owns the read model dims its duplicate stubs too.
+  const nodeSliceIds = new Map();
+  for (const s of model.slices || []) {
+    for (const id of s.nodeIds) {
+      if (!nodeSliceIds.has(id)) nodeSliceIds.set(id, new Set());
+      nodeSliceIds.get(id).add(s.id);
+    }
+  }
+  const sliceIdsAttr = (el) => {
+    const own = nodeSliceIds.get(el.id);
+    const orig = el.originalId ? nodeSliceIds.get(el.originalId) : null;
+    if (!own && !orig) return null;
+    const merged = new Set([...(own || []), ...(orig || [])]);
+    return merged.size ? [...merged].join(" ") : null;
+  };
+
   const nodeG = gNodes
     .selectAll("g.node")
     .data(nodeData, (d) => d.el.id)
     .join("g")
     .attr("class", (d) => `node node-${d.el.kind}`)
     .attr("data-node-id", (d) => d.el.id)
+    .attr("data-slice-ids", (d) => sliceIdsAttr(d.el))
     .attr("data-x", (d) => d.x)
     .attr("data-y", (d) => d.y)
     .attr("data-w", (d) => d.w)
@@ -1360,6 +1385,71 @@ function edgePath(d) {
   const tension = Math.min(dy * 0.5, 40);
   const signY = ty > sy ? 1 : -1;
   return `M${sx},${sy} C${sx},${sy + signY * tension} ${tx},${ty - signY * tension} ${tx},${ty}`;
+}
+
+// ── Interactive slice filtering ────────────────────────────────────────────
+// Dim everything that isn't part of the selected slice(s), leaving the layout
+// untouched so nodes never jump around. Operates purely on the rendered DOM
+// (via the `data-slice-id`/`data-slice-ids`/`data-from`/`data-to` attributes
+// stamped by `drawInto`), so it works for both the standalone renderer and the
+// Mermaid adapter, and can be driven by any host page.
+//
+//   svgEl          — the <svg> element (or a d3 selection of it) to filter.
+//   activeSliceIds — an array/Set of slice ids to keep highlighted. Pass an
+//                    empty array/Set, null, or undefined to clear the filter
+//                    (restore every element to full visibility).
+const SLICE_DIM_OPACITY = 0.12;
+
+export function listSliceIds(svgEl) {
+  const el = svgEl && svgEl.node ? svgEl.node() : svgEl;
+  if (!el) return [];
+  const seen = new Map();
+  el.querySelectorAll("g.slice[data-slice-id]").forEach((g) => {
+    const id = g.getAttribute("data-slice-id");
+    if (id && !seen.has(id)) {
+      seen.set(id, g.getAttribute("data-slice-label") || id);
+    }
+  });
+  return [...seen].map(([id, label]) => ({ id, label }));
+}
+
+export function applySliceFilter(svgEl, activeSliceIds) {
+  const el = svgEl && svgEl.node ? svgEl.node() : svgEl;
+  if (!el) return;
+
+  const active =
+    activeSliceIds instanceof Set ? activeSliceIds : new Set(activeSliceIds || []);
+  const filtering = active.size > 0;
+
+  const setDim = (node, dim) => {
+    node.style.opacity = dim ? String(SLICE_DIM_OPACITY) : "";
+    node.style.transition = "opacity 0.15s ease";
+  };
+
+  // Nodes: active when any of their slice ids is selected. Track which node
+  // ids end up visible so edges can be gated on both endpoints being visible.
+  const visibleNodeIds = new Set();
+  el.querySelectorAll("g.node[data-node-id]").forEach((g) => {
+    if (!filtering) { setDim(g, false); visibleNodeIds.add(g.getAttribute("data-node-id")); return; }
+    const ids = (g.getAttribute("data-slice-ids") || "").split(/\s+/).filter(Boolean);
+    const isActive = ids.some((id) => active.has(id));
+    setDim(g, !isActive);
+    if (isActive) visibleNodeIds.add(g.getAttribute("data-node-id"));
+  });
+
+  // Edges: visible only when both endpoints are visible.
+  el.querySelectorAll("path.edge").forEach((p) => {
+    if (!filtering) { setDim(p, false); return; }
+    const from = p.getAttribute("data-from");
+    const to = p.getAttribute("data-to");
+    setDim(p, !(visibleNodeIds.has(from) && visibleNodeIds.has(to)));
+  });
+
+  // Slice boxes: highlight the selected ones, dim the rest.
+  el.querySelectorAll("g.slice[data-slice-id]").forEach((g) => {
+    if (!filtering) { setDim(g, false); return; }
+    setDim(g, !active.has(g.getAttribute("data-slice-id")));
+  });
 }
 
 function wrapLabel(text, maxChars) {
