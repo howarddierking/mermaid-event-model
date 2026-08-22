@@ -41,7 +41,8 @@ stage_site() {
 
   # ES modules
   cp "$ROOT_DIR"/index.js "$ROOT_DIR"/event-model.js "$ROOT_DIR"/event-model-mermaid.js \
-     "$ROOT_DIR"/slice-tests.js "$ROOT_DIR"/slice-tests-mermaid.js "$SITE_DIR/"
+     "$ROOT_DIR"/slice-tests.js "$ROOT_DIR"/slice-tests-mermaid.js \
+     "$ROOT_DIR"/codegen.js "$SITE_DIR/"
 
   # Static assets
   cp "$ROOT_DIR"/settings.png "$SITE_DIR/"
