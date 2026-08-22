@@ -144,17 +144,45 @@ export class StaticSiteStack extends cdk.Stack {
     // ─────────────────────────────────────────────────────────────────────────
     const siteDir = path.join(__dirname, "..", "..", "_site");
 
-    new s3deploy.BucketDeployment(this, "DeploySite", {
+    // This is a no-build site: model-viewer.html imports .js modules directly
+    // by name (no content-hashed filenames). A long TTL on those files lets a
+    // browser pair a fresh HTML with a stale cached module (or vice versa),
+    // which breaks ES module imports. So HTML/JS are served `no-cache`
+    // (cached but always revalidated via ETag), while immutable-ish assets
+    // (images) and content files (md/json) get longer TTLs.
+    //
+    // Deployed in two passes over the same asset. The first pass owns
+    // `prune` (removing files deleted from _site); the second must not prune,
+    // or the passes would delete each other's objects.
+    const commonDeployProps = {
       sources: [s3deploy.Source.asset(siteDir)],
       destinationBucket: this.siteBucket,
       distribution: this.distribution,
       distributionPaths: ["/*"],
       memoryLimit: 512,
+    };
+
+    // Pass 1 — HTML + JS: always revalidate so imports never desync.
+    new s3deploy.BucketDeployment(this, "DeploySiteRevalidated", {
+      ...commonDeployProps,
       prune: true,
-      // Content-type driven cache-control headers
+      exclude: ["*"],
+      include: ["*.html", "*.js"],
       cacheControl: [
         s3deploy.CacheControl.setPublic(),
-        s3deploy.CacheControl.maxAge(cdk.Duration.days(7)),
+        s3deploy.CacheControl.noCache(),
+        s3deploy.CacheControl.mustRevalidate(),
+      ],
+    });
+
+    // Pass 2 — everything else (images, .md, .json, etc.): cacheable.
+    new s3deploy.BucketDeployment(this, "DeploySiteCached", {
+      ...commonDeployProps,
+      prune: false,
+      exclude: ["*.html", "*.js"],
+      cacheControl: [
+        s3deploy.CacheControl.setPublic(),
+        s3deploy.CacheControl.maxAge(cdk.Duration.hours(1)),
       ],
     });
 
