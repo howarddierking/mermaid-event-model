@@ -11,14 +11,14 @@
 ```mermaid
 eventModel
 	readModel guestRoster["Guest Roster"] {
-		guestId: UUID
+		*email: string
 		guestName: string
 		roomNumber: int
 		checkedInAt: timestamp
 		isPresent: boolean
 	}
 	domainEvent guestLeft["Guest Left Hotel"] {
-		guestId: UUID
+		email: string
 		departedAt: timestamp
 	}
 	slice feed_guest_left["Feed: Guest Left Hotel"]

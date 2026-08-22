@@ -11,13 +11,13 @@
 ```mermaid
 eventModel
 	domainEvent checkedIn["Checked In"] {
-		bookingId: UUID
-		guestId: UUID
+		*bookingId: UUID
+		*email: string
 		roomId: UUID
 		checkedInAt: timestamp
 	}
 	readModel guestRoster["Guest Roster"] {
-		guestId: UUID
+		*email: string
 		guestName: string
 		roomNumber: int
 		checkedInAt: timestamp

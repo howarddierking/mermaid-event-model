@@ -54,8 +54,13 @@ function extractFromMarkdown(src, keyword) {
 
 function parseSliceTests(src) {
   src = extractFromMarkdown(src, "sliceTests");
+  // The optional id between the kind and the label is the item's stable,
+  // machine-branchable code. It matters on `error`: the code is what reaches a
+  // client (and what a generated exception type derives from), while the label
+  // is prose that can be reworded or translated without breaking anyone.
+  // All-hyphen, e.g. error guest-already-registered["..."].
   const itemRe =
-    /^(domainEvent|externalEvent|command|readModel|automation|ui|error)\s*\["([^"]*)"\]\s*(\{)?\s*$/;
+    /^(domainEvent|externalEvent|command|readModel|automation|ui|error)(?:\s+([a-z][a-z0-9-]*))?\s*\["([^"]*)"\]\s*(\{)?\s*$/;
   // name: type            (type only, as in eventModel)
   // name: type = value     (sliceTests-only example value; value is the raw
   //                         text after `=`, e.g. 101, "a1b2", 2026-08-10, true)
@@ -89,7 +94,7 @@ function parseSliceTests(src) {
         }
         const im = l.match(itemRe);
         if (im && section) {
-          const [, kind, label, openBrace] = im;
+          const [, kind, code, label, openBrace] = im;
           const fields = [];
           i++;
           if (openBrace) {
@@ -101,7 +106,7 @@ function parseSliceTests(src) {
               if (fm) fields.push({ name: fm[1], type: fm[2], value: fm[3] });
             }
           }
-          test[section].push({ kind, label, fields });
+          test[section].push({ kind, code: code ?? null, label, fields });
           continue;
         }
         // Unknown line inside a test — skip without breaking out.

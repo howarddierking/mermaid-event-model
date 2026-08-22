@@ -41,7 +41,8 @@ grammar — this is the cheatsheet:
 - `ui:<Actor> <id>["Label"] { fields }`
 - `command <id>["Label"] [reads [<event>, ...]] { fields }` — `reads` is a
   DCB consistency directive, **not** a flow edge; it never participates in
-  ranking, slice membership, or arrow drawing.
+  ranking, slice membership, or arrow drawing. Further branches go on
+  following indented lines: `reads [<event>, ...] by <axis>`.
 - `domainEvent[:<Aggregate>] <id>["Label"] { fields }` — unqualified events
   land in a synthesized `Events` lane below `Time`.
 - `externalEvent <id>["Label"] { fields }` — placed in a synthesized
@@ -52,6 +53,15 @@ grammar — this is the cheatsheet:
   whose referenced nodes are grouped into a dashed bounding box.
 - Field types: `string`, `int`, `float`, `decimal`, `boolean`, `date`,
   `timestamp`, `UUID`.
+- A field may carry a leading `*` — a **tag axis**, an independent handle a
+  decision may scope its consistency boundary to. Events carry zero to N and
+  they never compose into a key; all composition is command-side, in a `by`
+  clause. On a `readModel`, `*` is the row key and multiple `*` DO compose.
+  A command's boundary is an OR of branches, one per `reads` clause. `by` is
+  derived only when exactly one axis is common to the command and every event
+  in the branch — ambiguity is an error, never a guess. Reading an event on an
+  axis it does not declare matches nothing, which is the failure mode the
+  validator exists to catch.
 
 Canonical flow pattern: `ui → command → domainEvent → readModel → (ui | automation)`.
 
@@ -62,11 +72,15 @@ Each test is one Given / When / Then card. Items inside reuse the
 
 - `domainEvent`, `externalEvent`, `command`, `readModel`, `automation`,
   `ui` — same colors and shapes as `eventModel`.
-- `error["<message>"]` — **sliceTests only.** Expected rejection outcome
-  inside a `then` block. Renders as a red box (`#f87171` fill / `#7f1d1d`
-  stroke, matching the 400/900 palette pattern). When the slice is code-
-  generated, each `error[...]` maps to throwing the target framework's
-  domain exception with the exact message string used verbatim.
+- `error [<code>]["<message>"]` — **sliceTests only.** An expected rejection
+  outcome inside a `then` block. Renders as a red box (`#f87171` fill /
+  `#7f1d1d` stroke, matching the 400/900 palette pattern). When the slice is
+  code-generated, each `error[...]` maps to throwing the target framework's
+  domain exception with the message string used verbatim. The optional code is
+  all-hyphen lowercase (`guest-already-registered`); it is what a client
+  branches on and what the exception type derives from
+  (`GuestAlreadyRegistered`), which keeps the message free to reword or
+  translate without breaking callers.
 
 Data-section fields support one **sliceTests-only** extension over `eventModel`:
 an optional example value, `field: type = value` (e.g. `checkIn: date =

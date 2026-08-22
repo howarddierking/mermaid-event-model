@@ -12,14 +12,14 @@
 eventModel
 	actor Guest
 	domainEvent ra["Room Added"] {
-		roomId: UUID
-		roomNumber: int
+		*roomId: UUID
+		*roomNumber: int
 		floor: int
 		roomType: string
 		capacity: int
 	}
 	readModel avail["Room Availability"] {
-		roomId: UUID
+		*roomId: UUID
 		roomNumber: int
 		roomType: string
 		isAvailable: boolean

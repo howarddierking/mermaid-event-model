@@ -17,15 +17,16 @@ eventModel
 		currency: string
 		paymentMethod: string
 	}
-	command pay["Pay"] reads [booked, paymentRequested, paymentSucceeded] {
+	command pay["Pay"] {
 		bookingId: UUID
 		amount: decimal
 		currency: string
 		paymentMethod: string
 	}
+		reads [booked, paymentRequested, paymentSucceeded] by bookingId
 	domainEvent paymentRequested["Payment Requested"] {
-		paymentId: UUID
-		bookingId: UUID
+		*paymentId: UUID
+		*bookingId: UUID
 		amount: decimal
 		currency: string
 		paymentMethod: string

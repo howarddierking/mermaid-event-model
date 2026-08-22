@@ -16,13 +16,13 @@ eventModel
 		guestName: string
 		roomNumber: int
 	}
-	command checkin["Check-in"] reads [booked, checkedIn] {
+	command checkin["Check-in"] {
 		bookingId: UUID
-		guestId: UUID
 	}
+		reads [booked, checkedIn] by bookingId
 	domainEvent checkedIn["Checked In"] {
-		bookingId: UUID
-		guestId: UUID
+		*bookingId: UUID
+		*email: string
 		roomId: UUID
 		checkedInAt: timestamp
 	}
