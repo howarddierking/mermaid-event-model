@@ -65,6 +65,70 @@
   }
   .content pre.mermaid svg { display: block; }
 
+  /* Code generation panel (one per slice, shown at the top of the content) */
+  .codegen {
+    margin: 0 0 24px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #fff;
+    overflow: hidden;
+  }
+  .codegen-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e5e7eb;
+  }
+  .codegen-bar .codegen-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #475569;
+    margin-right: auto;
+  }
+  .codegen-bar button {
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    padding: 6px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #fff;
+    color: #1f2937;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .codegen-bar button:hover { background: #eef2f7; border-color: #9ca3af; }
+  .codegen-bar button:active { background: #e5e7eb; }
+  .codegen-bar button:disabled { opacity: 0.55; cursor: default; }
+  .codegen-bar button.primary { background: #1e3a8a; color: #fff; border-color: #1e3a8a; }
+  .codegen-bar button.primary:hover { background: #1e40af; }
+  /* Qualified with .content so these win over the base `.content pre` rule
+     (which would otherwise force a light background onto this <pre>). */
+  .content pre.codegen-output {
+    margin: 0;
+    padding: 14px 16px;
+    background: #0f172a;
+    color: #e2e8f0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+    line-height: 1.5;
+    max-height: 460px;
+    overflow: auto;
+    white-space: pre;
+    tab-size: 2;
+    border: none;
+  }
+  .content pre.codegen-output.empty {
+    color: #94a3b8;
+    font-style: italic;
+    white-space: normal;
+    background: #f8fafc;
+  }
+
   .empty { color: #6b7280; font-style: italic; margin-top: 40px; text-align: center; }
   .error {
     color: #991b1b;
@@ -105,6 +169,7 @@
 import mermaid from 'mermaid';
 import { marked } from 'marked';
 import diagramDefinitions from './index.js';
+import { generateFromSource } from './codegen.js';
 
 await mermaid.registerExternalDiagrams(diagramDefinitions);
 mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
@@ -195,6 +260,106 @@ function renderSidebar(sliceFiles) {
   }
 }
 
+// Build a code-generation panel for the active slice and insert it at the top
+// of the content. Codegen is per-slice (it needs both the eventModel and
+// sliceTests blocks), so there is exactly one panel, generated lazily on click.
+function attachCodegenPanel(container, src, sliceName) {
+  const panel = document.createElement('div');
+  panel.className = 'codegen';
+
+  const bar = document.createElement('div');
+  bar.className = 'codegen-bar';
+
+  const title = document.createElement('span');
+  title.className = 'codegen-title';
+  title.textContent = 'Code Generation';
+  bar.appendChild(title);
+
+  const genBtn = document.createElement('button');
+  genBtn.type = 'button';
+  genBtn.className = 'primary';
+  genBtn.textContent = 'Generate TypeScript';
+
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.textContent = 'Copy';
+  copyBtn.disabled = true;
+
+  const dlBtn = document.createElement('button');
+  dlBtn.type = 'button';
+  dlBtn.textContent = 'Download .ts';
+  dlBtn.disabled = true;
+
+  bar.append(genBtn, copyBtn, dlBtn);
+
+  const output = document.createElement('pre');
+  output.className = 'codegen-output empty';
+  output.textContent = 'Click “Generate TypeScript” to scaffold types, a decider/projection, domain errors, and test stubs from this slice.';
+
+  panel.append(bar, output);
+  container.insertBefore(panel, container.firstChild);
+
+  let generated = null;
+  const fileBase = (sliceName || 'slice').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'slice';
+
+  const generate = () => {
+    const original = genBtn.textContent;
+    genBtn.disabled = true;
+    genBtn.textContent = 'Generating…';
+    try {
+      generated = generateFromSource(src, { sliceName });
+      output.textContent = generated;
+      output.classList.remove('empty');
+      copyBtn.disabled = false;
+      dlBtn.disabled = false;
+      genBtn.textContent = 'Regenerate';
+    } catch (err) {
+      console.error('codegen failed', err);
+      output.textContent = 'Code generation failed:\n' + (err && err.stack ? err.stack : String(err));
+      output.classList.remove('empty');
+      genBtn.textContent = original;
+    } finally {
+      genBtn.disabled = false;
+    }
+  };
+
+  genBtn.addEventListener('click', generate);
+
+  copyBtn.addEventListener('click', async () => {
+    if (generated == null) return;
+    const label = copyBtn.textContent;
+    try {
+      await navigator.clipboard.writeText(generated);
+      copyBtn.textContent = 'Copied';
+    } catch (_) {
+      // Fallback for environments without the async clipboard API.
+      const ta = document.createElement('textarea');
+      ta.value = generated;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); copyBtn.textContent = 'Copied'; }
+      catch { copyBtn.textContent = 'Copy failed'; }
+      ta.remove();
+    }
+    setTimeout(() => { copyBtn.textContent = label; }, 1400);
+  });
+
+  dlBtn.addEventListener('click', () => {
+    if (generated == null) return;
+    const blob = new Blob([generated], { type: 'text/x-typescript;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileBase + '.ts';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  return panel;
+}
+
 async function loadAndRender() {
   let src;
   try {
@@ -223,6 +388,15 @@ async function loadAndRender() {
       await mermaid.run({ nodes });
     } catch (err) {
       console.error('mermaid render error', err);
+    }
+
+    // Code generation is per-slice: show one panel at the top of the content
+    // whenever the source declares an eventModel block (slice specs and the
+    // model overview). It reads the raw markdown (`src`), whose eventModel and
+    // sliceTests blocks the generator extracts itself.
+    if (/(^|\n)\s*eventModel\b/.test(src) || /```[\s\S]*?\beventModel\b/.test(src)) {
+      const sliceName = activeFile === '__model' ? MODEL : activeFile.replace(/\.md$/, '');
+      attachCodegenPanel(content, src, sliceName);
     }
   }
 }
