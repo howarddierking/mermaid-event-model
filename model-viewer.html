@@ -278,7 +278,7 @@ function attachCodegenPanel(container, src, sliceName) {
   const genBtn = document.createElement('button');
   genBtn.type = 'button';
   genBtn.className = 'primary';
-  genBtn.textContent = 'Generate TypeScript';
+  genBtn.textContent = 'Generate Axon (Java)';
 
   const copyBtn = document.createElement('button');
   copyBtn.type = 'button';
@@ -287,20 +287,22 @@ function attachCodegenPanel(container, src, sliceName) {
 
   const dlBtn = document.createElement('button');
   dlBtn.type = 'button';
-  dlBtn.textContent = 'Download .ts';
+  dlBtn.textContent = 'Download .java';
   dlBtn.disabled = true;
 
   bar.append(genBtn, copyBtn, dlBtn);
 
   const output = document.createElement('pre');
   output.className = 'codegen-output empty';
-  output.textContent = 'Click “Generate TypeScript” to scaffold types, a decider/projection, domain errors, and test stubs from this slice.';
+  output.textContent = 'Click “Generate Axon (Java)” to scaffold Axon Framework 5 commands, events, a DCB command handler (or projection), domain exceptions, and AxonTestFixture tests from this slice.';
 
   panel.append(bar, output);
   container.insertBefore(panel, container.firstChild);
 
   let generated = null;
-  const fileBase = (sliceName || 'slice').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'slice';
+  // Java files are conventionally PascalCase; derive one from the slice name.
+  const fileBase = ((sliceName || 'slice').replace(/[^a-z0-9]+/gi, ' ').trim().split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('')) || 'Slice';
 
   const generate = () => {
     const original = genBtn.textContent;
@@ -346,11 +348,11 @@ function attachCodegenPanel(container, src, sliceName) {
 
   dlBtn.addEventListener('click', () => {
     if (generated == null) return;
-    const blob = new Blob([generated], { type: 'text/x-typescript;charset=utf-8' });
+    const blob = new Blob([generated], { type: 'text/x-java-source;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = fileBase + '.ts';
+    a.download = fileBase + '.java';
     document.body.appendChild(a);
     a.click();
     a.remove();
