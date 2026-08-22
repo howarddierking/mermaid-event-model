@@ -174,106 +174,6 @@ import { generateFromSource } from './codegen.js';
 await mermaid.registerExternalDiagrams(diagramDefinitions);
 mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
 
-// Build a code-generation panel for the active slice and insert it at the top
-// of the content. Codegen is per-slice (it needs both the eventModel and
-// sliceTests blocks), so there is exactly one panel, generated lazily on click.
-function attachCodegenPanel(container, src, sliceName) {
-  const panel = document.createElement('div');
-  panel.className = 'codegen';
-
-  const bar = document.createElement('div');
-  bar.className = 'codegen-bar';
-
-  const title = document.createElement('span');
-  title.className = 'codegen-title';
-  title.textContent = 'Code Generation';
-  bar.appendChild(title);
-
-  const genBtn = document.createElement('button');
-  genBtn.type = 'button';
-  genBtn.className = 'primary';
-  genBtn.textContent = 'Generate TypeScript';
-
-  const copyBtn = document.createElement('button');
-  copyBtn.type = 'button';
-  copyBtn.textContent = 'Copy';
-  copyBtn.disabled = true;
-
-  const dlBtn = document.createElement('button');
-  dlBtn.type = 'button';
-  dlBtn.textContent = 'Download .ts';
-  dlBtn.disabled = true;
-
-  bar.append(genBtn, copyBtn, dlBtn);
-
-  const output = document.createElement('pre');
-  output.className = 'codegen-output empty';
-  output.textContent = 'Click “Generate TypeScript” to scaffold types, a decider/projection, domain errors, and test stubs from this slice.';
-
-  panel.append(bar, output);
-  container.insertBefore(panel, container.firstChild);
-
-  let generated = null;
-  const fileBase = (sliceName || 'slice').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'slice';
-
-  const generate = () => {
-    const original = genBtn.textContent;
-    genBtn.disabled = true;
-    genBtn.textContent = 'Generating…';
-    try {
-      generated = generateFromSource(src, { sliceName });
-      output.textContent = generated;
-      output.classList.remove('empty');
-      copyBtn.disabled = false;
-      dlBtn.disabled = false;
-      genBtn.textContent = 'Regenerate';
-    } catch (err) {
-      console.error('codegen failed', err);
-      output.textContent = 'Code generation failed:\n' + (err && err.stack ? err.stack : String(err));
-      output.classList.remove('empty');
-      genBtn.textContent = original;
-    } finally {
-      genBtn.disabled = false;
-    }
-  };
-
-  genBtn.addEventListener('click', generate);
-
-  copyBtn.addEventListener('click', async () => {
-    if (generated == null) return;
-    const label = copyBtn.textContent;
-    try {
-      await navigator.clipboard.writeText(generated);
-      copyBtn.textContent = 'Copied';
-    } catch (_) {
-      // Fallback for environments without the async clipboard API.
-      const ta = document.createElement('textarea');
-      ta.value = generated;
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand('copy'); copyBtn.textContent = 'Copied'; }
-      catch { copyBtn.textContent = 'Copy failed'; }
-      ta.remove();
-    }
-    setTimeout(() => { copyBtn.textContent = label; }, 1400);
-  });
-
-  dlBtn.addEventListener('click', () => {
-    if (generated == null) return;
-    const blob = new Blob([generated], { type: 'text/x-typescript;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileBase + '.ts';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  });
-
-  return panel;
-}
-
 // `model` is the base name; the conventions are:
 //   <model>.md          → the model overview file (one per model)
 //   <model>-slices/     → directory of per-slice spec files
@@ -360,6 +260,108 @@ function renderSidebar(sliceFiles) {
   }
 }
 
+// Build a code-generation panel for the active slice and insert it at the top
+// of the content. Codegen is per-slice (it needs both the eventModel and
+// sliceTests blocks), so there is exactly one panel, generated lazily on click.
+function attachCodegenPanel(container, src, sliceName) {
+  const panel = document.createElement('div');
+  panel.className = 'codegen';
+
+  const bar = document.createElement('div');
+  bar.className = 'codegen-bar';
+
+  const title = document.createElement('span');
+  title.className = 'codegen-title';
+  title.textContent = 'Code Generation';
+  bar.appendChild(title);
+
+  const genBtn = document.createElement('button');
+  genBtn.type = 'button';
+  genBtn.className = 'primary';
+  genBtn.textContent = 'Generate Axon (Java)';
+
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.textContent = 'Copy';
+  copyBtn.disabled = true;
+
+  const dlBtn = document.createElement('button');
+  dlBtn.type = 'button';
+  dlBtn.textContent = 'Download .java';
+  dlBtn.disabled = true;
+
+  bar.append(genBtn, copyBtn, dlBtn);
+
+  const output = document.createElement('pre');
+  output.className = 'codegen-output empty';
+  output.textContent = 'Click “Generate Axon (Java)” to scaffold Axon Framework 5 commands, events, a DCB command handler (or projection), domain exceptions, and AxonTestFixture tests from this slice.';
+
+  panel.append(bar, output);
+  container.insertBefore(panel, container.firstChild);
+
+  let generated = null;
+  // Java files are conventionally PascalCase; derive one from the slice name.
+  const fileBase = ((sliceName || 'slice').replace(/[^a-z0-9]+/gi, ' ').trim().split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('')) || 'Slice';
+
+  const generate = () => {
+    const original = genBtn.textContent;
+    genBtn.disabled = true;
+    genBtn.textContent = 'Generating…';
+    try {
+      generated = generateFromSource(src, { sliceName });
+      output.textContent = generated;
+      output.classList.remove('empty');
+      copyBtn.disabled = false;
+      dlBtn.disabled = false;
+      genBtn.textContent = 'Regenerate';
+    } catch (err) {
+      console.error('codegen failed', err);
+      output.textContent = 'Code generation failed:\n' + (err && err.stack ? err.stack : String(err));
+      output.classList.remove('empty');
+      genBtn.textContent = original;
+    } finally {
+      genBtn.disabled = false;
+    }
+  };
+
+  genBtn.addEventListener('click', generate);
+
+  copyBtn.addEventListener('click', async () => {
+    if (generated == null) return;
+    const label = copyBtn.textContent;
+    try {
+      await navigator.clipboard.writeText(generated);
+      copyBtn.textContent = 'Copied';
+    } catch (_) {
+      // Fallback for environments without the async clipboard API.
+      const ta = document.createElement('textarea');
+      ta.value = generated;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); copyBtn.textContent = 'Copied'; }
+      catch { copyBtn.textContent = 'Copy failed'; }
+      ta.remove();
+    }
+    setTimeout(() => { copyBtn.textContent = label; }, 1400);
+  });
+
+  dlBtn.addEventListener('click', () => {
+    if (generated == null) return;
+    const blob = new Blob([generated], { type: 'text/x-java-source;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileBase + '.java';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  return panel;
+}
+
 async function loadAndRender() {
   let src;
   try {
@@ -389,6 +391,7 @@ async function loadAndRender() {
     } catch (err) {
       console.error('mermaid render error', err);
     }
+
     // Code generation is per-slice: show one panel at the top of the content
     // whenever the source declares an eventModel block (slice specs and the
     // model overview). It reads the raw markdown (`src`), whose eventModel and
