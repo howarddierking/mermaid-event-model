@@ -281,10 +281,15 @@ function attachCodegenPanel(container, src, sliceName) {
   genBtn.textContent = 'Generate Axon (Java)';
 
   // A second primary target: the AWS-native binding (CDK + Lambda, TypeScript).
+  // On the model (__model) view this produces the COMMON shared runtime
+  // (event-store envelope, merged EventTypes, DynamoDB/Kinesis/Redis helpers,
+  // shared CDK infra); on a slice view it produces ONLY that slice's part,
+  // importing the shared runtime. The generator infers which from the source.
+  const isModelView = sliceName === MODEL;
   const awsBtn = document.createElement('button');
   awsBtn.type = 'button';
   awsBtn.className = 'primary';
-  awsBtn.textContent = 'Generate AWS (CDK/TS)';
+  awsBtn.textContent = isModelView ? 'Generate AWS shared runtime' : 'Generate AWS (CDK/TS)';
 
   const copyBtn = document.createElement('button');
   copyBtn.type = 'button';
@@ -305,7 +310,9 @@ function attachCodegenPanel(container, src, sliceName) {
 
   const output = document.createElement('pre');
   output.className = 'codegen-output empty';
-  output.textContent = 'Generate Axon Framework 5 (Java) or AWS-native (CDK + Lambda, TypeScript) scaffolding from this slice — commands, events, a command handler (or projection/projector), and validation derived from the slice tests.';
+  output.textContent = isModelView
+    ? 'Generate scaffolding from this model. “Generate AWS shared runtime” emits the COMMON part once — the event-store envelope, the merged EventTypes map, the DynamoDB/Kinesis/Redis runtime, and the shared CDK infra — which each slice imports. Open a slice to generate just its part.'
+    : 'Generate Axon Framework 5 (Java) or AWS-native (CDK + Lambda, TypeScript) scaffolding from this slice — commands, events, a command handler (or projection/projector), and validation derived from the slice tests. The AWS output imports the model’s shared runtime instead of re-emitting it.';
 
   panel.append(bar, output);
   container.insertBefore(panel, container.firstChild);
@@ -378,7 +385,11 @@ function attachCodegenPanel(container, src, sliceName) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = fileBase + '.' + generatedExt;
+    // The AWS shared runtime (model view) is conventionally event-store.ts;
+    // everything else uses the PascalCase slice base.
+    a.download = (generatedExt === 'ts' && isModelView)
+      ? 'event-store.ts'
+      : fileBase + '.' + generatedExt;
     document.body.appendChild(a);
     a.click();
     a.remove();
