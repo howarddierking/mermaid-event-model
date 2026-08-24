@@ -1047,3 +1047,881 @@ export function generateManifestFromSource(src, opts = {}) {
   const manifest = buildManifest({ model, tests, sliceName: opts.sliceName, decidedExclusions });
   return JSON.stringify(manifest, null, 2) + "\n";
 }
+
+// ═════════════════════════════════════════════════════════════════════════
+// AWS-native target — TypeScript CDK + Lambda handlers.
+//
+// A second binding of the SAME slice spec onto a serverless CQRS/ES stack that
+// mirrors the `aws-native` branch of the sibling loan-originations project:
+//
+//   - API Gateway → Lambda command handler (write side): load the aggregate's
+//     events from a DynamoDB event store, replay to state, validate business
+//     rules, persist the new event with optimistic concurrency, publish to
+//     Kinesis. Uses @aws-sdk/lib-dynamodb (QueryCommand, PutCommand) and
+//     @aws-sdk/client-kinesis (PutRecordCommand), env EVENT_TABLE_NAME /
+//     KINESIS_STREAM_NAME — exactly as the real handler does.
+//   - DynamoDB Streams → Lambda projector (read side): fold source events into
+//     an ElastiCache/Redis read model via ioredis, one branch per source event.
+//   - API Gateway → Lambda query handler reading the Redis read model.
+//   - CDK constructs (aws-cdk-lib/aws-lambda-nodejs NodejsFunction + API
+//     Gateway + DynamoDB Streams event source), matching regional-stack.ts.
+//
+// Same design goals as the Java target: pure & deterministic (same input →
+// byte-identical output, no DOM, no I/O), reuses the shared parsers and the
+// same identifier / partitioning / unmapped-detection helpers, so the DSL keeps
+// a single source of truth across both bindings.
+// ═════════════════════════════════════════════════════════════════════════
+
+// The stored event names live under the same namespace the Java target pins
+// (EVENT_NAMESPACE). The AWS store keys events by a bare `eventType` string
+// (see events.ts), so the local PascalCase name is the stored name here.
+
+// Type mapping: DSL primitives → TypeScript. Unknown types become named
+// references (PascalCase) emitted verbatim so the code compiles once defined.
+const PRIMITIVE_TS = {
+  string: "string",
+  int: "number",
+  integer: "number",
+  long: "number",
+  decimal: "number",
+  float: "number",
+  double: "number",
+  number: "number",
+  boolean: "boolean",
+  bool: "boolean",
+  // Dates/timestamps cross the wire as ISO-8601 strings in the AWS stack.
+  date: "string",
+  timestamp: "string",
+  datetime: "string",
+  uuid: "string",
+};
+
+function tsType(dslType) {
+  if (!dslType) return "unknown";
+  if (Object.prototype.hasOwnProperty.call(PRIMITIVE_TS, dslType)) return PRIMITIVE_TS[dslType];
+  const lower = dslType.toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(PRIMITIVE_TS, lower)) return PRIMITIVE_TS[lower];
+  return pascal(dslType); // unknown → named domain type
+}
+
+// The stored `eventType` string for an event (PascalCase of its id), matching
+// the values in the real events.ts EventTypes map.
+function tsEventName(elOrId) {
+  return localEventName(elOrId);
+}
+
+// The SCREAMING_SNAKE key used in the EventTypes const map.
+function eventTypeKey(elOrId) {
+  return constant(localEventName(elOrId));
+}
+
+// A TS field list "name: type;" body for an interface.
+function tsInterfaceBody(out, fields) {
+  for (const f of fields || []) {
+    out.line(`${camel(f.name)}: ${tsType(f.type)};`);
+  }
+}
+
+// A safe TS string literal.
+function tsStr(s) {
+  return JSON.stringify(String(s == null ? "" : s));
+}
+
+// ── The producedByCommand / source-event maps, shared shape with the Java path.
+function producedByCommandMap(model, parts) {
+  const eventIds = new Set([...parts.domainEvent, ...parts.externalEvent].map((e) => e.id));
+  const produced = new Map(parts.command.map((c) => [c.id, []]));
+  for (const e of model.edges) {
+    if (produced.has(e.from) && eventIds.has(e.to)) produced.get(e.from).push(e.to);
+  }
+  return produced;
+}
+
+// Source events feeding a read model (edges: event -> readModel).
+function sourceEventsFor(model, parts, readModelId) {
+  const eventIds = new Set([...parts.domainEvent, ...parts.externalEvent].map((e) => e.id));
+  const out = [];
+  for (const e of model.edges) {
+    if (e.to === readModelId && eventIds.has(e.from)) out.push(e.from);
+  }
+  return out;
+}
+
+// Expected validation error messages for a command, copied verbatim from the
+// slice's `then error[...]` items (same source the Java exceptions use). These
+// become the strings validateCommand returns, exactly like aggregate.ts.
+function errorMessagesFor(tests) {
+  const seen = new Map(); // message -> code/label
+  for (const t of tests) {
+    for (const item of [...t.given, ...t.when, ...t.then]) {
+      if (item.kind !== "error") continue;
+      const msg = item.label;
+      if (!seen.has(msg)) seen.set(msg, item.code || item.label);
+    }
+  }
+  return [...seen.keys()];
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// AWS-native section generators
+// ─────────────────────────────────────────────────────────────────────────
+function genAwsHeader(out, sliceName) {
+  out.line("// ─────────────────────────────────────────────────────────────");
+  out.line(`// Generated from slice: ${sliceName}`);
+  out.line("// Target: AWS-native (CDK + Lambda, TypeScript)");
+  out.line("// CQRS/Event Sourcing: API Gateway + Lambda + DynamoDB event store");
+  out.line("//                      + Kinesis + DynamoDB Streams + ElastiCache (Redis).");
+  out.line("// Source of truth is the .md slice spec — regenerate, don't hand-edit.");
+  out.line("// ─────────────────────────────────────────────────────────────");
+  out.blank();
+}
+
+// The same "Model-layer findings" comment block the Java target emits, reusing
+// detectUnmapped + the decided-exclusions logic. Kept DRY: identical wording.
+function genAwsUnmappedAndExclusions(out, parts, producedByCommand, decidedExclusions) {
+  const unmapped = detectUnmapped(parts, producedByCommand, decidedExclusions);
+  if (unmapped.length === 0 && (!decidedExclusions || decidedExclusions.length === 0)) return;
+  out.line("// ── Model-layer findings (raised, never resolved in code) ──────────");
+  if (unmapped.length) {
+    out.line("// Unmapped fields — the model leaves these unplaced:");
+    for (const u of unmapped) {
+      const tag = u.decidedExclusion ? " [decided exclusion]" : " [OPEN]";
+      out.line(`//   - ${u.field}: ${u.reason}${tag}`);
+    }
+  }
+  const orphanExclusions = (decidedExclusions || []).filter(
+    (d) => !unmapped.some((u) => u.field === d.field)
+  );
+  if (orphanExclusions.length) {
+    out.line("// Decided exclusions recorded in the spec:");
+    for (const d of orphanExclusions) {
+      out.line(`//   - ${d.field}${d.reason ? ": " + d.reason : ""}`);
+    }
+  }
+  out.blank();
+}
+
+// The shared DomainEvent envelope + EventTypes const map (mirrors events.ts).
+function genAwsEventTypes(out, parts) {
+  const events = [...parts.domainEvent, ...parts.externalEvent];
+  out.line("// ── Domain events — immutable facts in the DynamoDB event store ──────");
+  out.line("// The stored envelope; `eventType` is the language-independent stored name.");
+  out.line("export interface DomainEvent {");
+  out.push();
+  out.line("aggregateId: string;");
+  out.line("version: number;");
+  out.line("eventType: string;");
+  out.line("timestamp: string;");
+  out.line("payload: Record<string, unknown>;");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  if (events.length > 0) {
+    out.line("// Stored event names — the migration contract shared with every binding.");
+    out.line("export const EventTypes = {");
+    out.push();
+    for (const ev of events) {
+      out.line(`${eventTypeKey(ev)}: ${tsStr(tsEventName(ev))},`);
+    }
+    out.pop();
+    out.line("} as const;");
+    out.blank();
+  }
+}
+
+// TS interfaces for commands, domain/external events, and read models.
+function genAwsInterfaces(out, parts) {
+  const groups = [
+    ["Commands", parts.command],
+    ["Domain events", parts.domainEvent],
+    ["External events", parts.externalEvent],
+    ["Read models", parts.readModel],
+  ];
+  for (const [heading, els] of groups) {
+    if (!els.length) continue;
+    out.line(`// ${heading}`);
+    for (const el of els) {
+      out.line(`/** ${el.label} */`);
+      out.line(`export interface ${typeNameFor(el)} {`);
+      out.push();
+      tsInterfaceBody(out, el.fields);
+      out.pop();
+      out.line("}");
+      out.blank();
+    }
+  }
+}
+
+// createEvent factory (mirrors events.ts) — only when the slice stores events.
+function genAwsCreateEvent(out, parts) {
+  if (parts.domainEvent.length === 0 && parts.externalEvent.length === 0) return;
+  out.line("// Factory for a stored event (stamps the ISO timestamp).");
+  out.line("export function createEvent(");
+  out.push();
+  out.line("aggregateId: string,");
+  out.line("version: number,");
+  out.line("eventType: string,");
+  out.line("payload: Record<string, unknown>");
+  out.pop();
+  out.line("): DomainEvent {");
+  out.push();
+  out.line("return { aggregateId, version, eventType, timestamp: new Date().toISOString(), payload };");
+  out.pop();
+  out.line("}");
+  out.blank();
+}
+
+// The aggregate: rehydrate(events) folds events into state; validateCommand
+// returns an error string (verbatim from the tests) or null. Mirrors the real
+// aggregate.ts style (state = fold over events, validate against status).
+function genAwsAggregate(out, parts, model, tests) {
+  const cmds = parts.command;
+  if (cmds.length === 0) return;
+
+  const producedByCommand = producedByCommandMap(model, parts);
+  const readEventIds = new Set();
+  for (const cmd of cmds) for (const r of cmd.reads || []) readEventIds.add(r);
+  const knownEvents = new Map([...parts.domainEvent, ...parts.externalEvent].map((e) => [e.id, e]));
+
+  // The set of fields the folded state may carry: union of read + produced
+  // event fields, plus a status + version the lifecycle needs.
+  const stateFields = new Map(); // name -> tsType
+  for (const id of readEventIds) {
+    const ev = knownEvents.get(id);
+    for (const f of (ev && ev.fields) || []) stateFields.set(camel(f.name), tsType(f.type));
+  }
+  for (const cmd of cmds) {
+    for (const id of producedByCommand.get(cmd.id) || []) {
+      const ev = knownEvents.get(id);
+      for (const f of (ev && ev.fields) || []) stateFields.set(camel(f.name), tsType(f.type));
+    }
+  }
+
+  out.line("// ── Aggregate — state is never stored; it is folded from events ─────");
+  out.line("// rehydrate() replays the event stream; validateCommand() enforces the");
+  out.line("// slice's business rules. This is the pure core of the write side.");
+  out.line("export interface AggregateState {");
+  out.push();
+  out.line("aggregateId: string;");
+  out.line("status: string | null;");
+  for (const [name, ty] of stateFields) {
+    if (name === "aggregateId" || name === "status" || name === "version") continue;
+    out.line(`${name}?: ${ty};`);
+  }
+  out.line("version: number;");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  out.line("export function rehydrate(events: DomainEvent[]): AggregateState {");
+  out.push();
+  out.line("let state: AggregateState = { aggregateId: '', status: null, version: 0 };");
+  out.line("for (const event of events) state = applyEvent(state, event);");
+  out.line("return state;");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  // applyEvent: one case per event the command(s) read (the events that shape
+  // state). Fold each event's fields into state; status is left as a TODO the
+  // lifecycle rules drive.
+  out.line("function applyEvent(state: AggregateState, event: DomainEvent): AggregateState {");
+  out.push();
+  out.line("switch (event.eventType) {");
+  out.push();
+  const foldEvents = [...readEventIds].map((id) => knownEvents.get(id)).filter(Boolean);
+  if (foldEvents.length === 0) {
+    out.line("// This command reads no prior events; state starts empty.");
+  }
+  for (const ev of foldEvents) {
+    out.line(`case EventTypes.${eventTypeKey(ev)}:`);
+    out.push();
+    out.line("return {");
+    out.push();
+    out.line("...state,");
+    out.line("aggregateId: event.aggregateId,");
+    out.line(`// TODO: set the status this event transitions to (e.g. '${constant(ev.id)}').`);
+    out.line(`status: state.status,`);
+    for (const f of ev.fields || []) {
+      if (f.axis) continue; // identity/axis fields keyed separately
+      out.line(`${camel(f.name)}: event.payload.${camel(f.name)} as ${tsType(f.type)},`);
+    }
+    out.line("version: event.version,");
+    out.pop();
+    out.line("};");
+    out.pop();
+  }
+  out.line("default:");
+  out.push();
+  out.line("return state;");
+  out.pop();
+  out.pop();
+  out.line("}");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  // validateCommand — verbatim error messages from the tests, keyed by command.
+  const messages = errorMessagesFor(tests.tests || []);
+  out.line("// Business-rule validation. Returns null when valid, else the error");
+  out.line("// message — copied verbatim from the slice's `then error[...]` items.");
+  out.line("export function validateCommand(");
+  out.push();
+  out.line("state: AggregateState,");
+  out.line("command: string");
+  out.pop();
+  out.line("): string | null {");
+  out.push();
+  out.line("switch (command) {");
+  out.push();
+  for (const cmd of cmds) {
+    out.line(`case ${tsStr(typeNameFor(cmd))}:`);
+    out.push();
+    if ((cmd.reads || []).length === 0) {
+      out.line("// Creation command — no prior state to validate against.");
+      out.line("return null;");
+    } else if (messages.length) {
+      out.line("// TODO: gate on state.status; reject with the rule below when invalid.");
+      messages.forEach((m) => out.line(`// if (/* invalid */ false) return ${tsStr(m)};`));
+      out.line("return null;");
+    } else {
+      out.line("// TODO: enforce this command's invariants against state.");
+      out.line("return null;");
+    }
+    out.pop();
+  }
+  out.line("default:");
+  out.push();
+  out.line("return `Unknown command: ${command}`;");
+  out.pop();
+  out.pop();
+  out.line("}");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  // Surface the verbatim rules as a reference block so they're visible even
+  // where the TODO branches above are still stubs.
+  if (messages.length) {
+    out.line("// Business rules enforced by this slice (verbatim from the spec tests):");
+    for (const m of messages) out.line(`//   - ${m}`);
+    out.blank();
+  }
+}
+
+// The command Lambda handler — load/replay/validate/persist/publish. Mirrors
+// commands/handler.ts: @aws-sdk/lib-dynamodb QueryCommand + PutCommand for the
+// event store (the DCB `reads` boundary is a query keyed by aggregateId with
+// optimistic concurrency on version) and @aws-sdk/client-kinesis to publish.
+function genAwsCommandHandler(out, parts, model) {
+  const cmds = parts.command;
+  if (cmds.length === 0) return false;
+  const producedByCommand = producedByCommandMap(model, parts);
+  const primary = cmds[0];
+  const axis = axesOf(primary)[0] || null;
+
+  out.line("// ── Command Lambda (write side) ─────────────────────────────────────");
+  out.line("// API Gateway → this handler. The DCB `reads` boundary becomes a");
+  out.line("// DynamoDB query keyed by aggregateId; the new event is persisted with");
+  out.line("// optimistic concurrency (version) and published to Kinesis.");
+  out.line("import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';");
+  out.line("import { DynamoDBClient } from '@aws-sdk/client-dynamodb';");
+  out.line("import { DynamoDBDocumentClient, QueryCommand, PutCommand } from '@aws-sdk/lib-dynamodb';");
+  out.line("import { KinesisClient, PutRecordCommand } from '@aws-sdk/client-kinesis';");
+  out.line("import { v4 as uuidv4 } from 'uuid';");
+  out.blank();
+  out.line("const dynamodb = DynamoDBDocumentClient.from(new DynamoDBClient({}));");
+  out.line("const kinesis = new KinesisClient({});");
+  out.line("const TABLE_NAME = process.env.EVENT_TABLE_NAME!;");
+  out.line("const STREAM_NAME = process.env.KINESIS_STREAM_NAME!;");
+  out.blank();
+
+  out.line("export async function handler(");
+  out.push();
+  out.line("event: APIGatewayProxyEvent");
+  out.pop();
+  out.line("): Promise<APIGatewayProxyResult> {");
+  out.push();
+  out.line("try {");
+  out.push();
+  out.line("if (event.httpMethod !== 'POST') return response(405, { error: 'Method not allowed' });");
+  out.line("const body = event.body ? JSON.parse(event.body) : {};");
+  cmds.forEach((cmd) => {
+    out.line(`// Route: handle ${tsStr(cmd.label)}`);
+    out.line(`return handle${typeNameFor(cmd)}(event, body);`);
+  });
+  out.pop();
+  out.line("} catch (err) {");
+  out.push();
+  out.line("console.error('Command handler error:', err);");
+  out.line("return response(500, { error: 'Internal server error' });");
+  out.pop();
+  out.line("}");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  cmds.forEach((cmd) => {
+    const cmdType = typeNameFor(cmd);
+    const produced = producedByCommand.get(cmd.id) || [];
+    const emitted = produced.length ? produced : parts.domainEvent.map((e) => e.id);
+    const firstEvent = emitted[0] || null;
+    const isCreation = (cmd.reads || []).length === 0;
+    const cmdAxis = axesOf(cmd)[0] || axis;
+
+    out.line(`async function handle${cmdType}(`);
+    out.push();
+    out.line("event: APIGatewayProxyEvent,");
+    out.line("body: Record<string, unknown>");
+    out.pop();
+    out.line("): Promise<APIGatewayProxyResult> {");
+    out.push();
+
+    // Destructure the command fields from the request body.
+    const cmdFields = (cmd.fields || []).filter((f) => !f.axis);
+    if (cmdFields.length) {
+      out.line(`const { ${cmdFields.map((f) => camel(f.name)).join(", ")} } = body as {`);
+      out.push();
+      for (const f of cmdFields) out.line(`${camel(f.name)}?: ${tsType(f.type)};`);
+      out.pop();
+      out.line("};");
+    }
+
+    if (isCreation) {
+      out.line(`const aggregateId = uuidv4();`);
+      out.line("const version = 1;");
+      if (firstEvent) {
+        out.line(`const domainEvent = createEvent(aggregateId, version, EventTypes.${eventTypeKey(firstEvent)}, {`);
+        out.push();
+        const ev = [...parts.domainEvent, ...parts.externalEvent].find((e) => e.id === firstEvent);
+        for (const f of (ev && ev.fields) || []) {
+          if (f.axis) continue;
+          out.line(`${camel(f.name)}: ${cmdFields.some((c) => c.name === f.name) ? camel(f.name) : `body.${camel(f.name)}`},`);
+        }
+        out.pop();
+        out.line("});");
+      } else {
+        out.line("const domainEvent = createEvent(aggregateId, version, 'TODO', body);");
+      }
+    } else {
+      // Route id from the axis (e.g. loanId in the path), then load + replay.
+      const idVar = cmdAxis ? camel(cmdAxis) : "aggregateId";
+      out.line(`// The aggregate id (DCB routing axis${cmdAxis ? " '" + cmdAxis + "'" : ""}) identifies the stream to load.`);
+      out.line(`const ${idVar} = event.pathParameters?.id ?? String(body.${idVar} ?? '');`);
+      out.line(`if (!${idVar}) return response(400, { error: '${idVar} is required' });`);
+      out.line(`const events = await loadEvents(${idVar});`);
+      out.line("if (events.length === 0) return response(404, { error: 'Aggregate not found' });");
+      out.line("const state = rehydrate(events);");
+      out.blank();
+      out.line("// Enforce business rules against the replayed state.");
+      out.line(`const validationError = validateCommand(state, ${tsStr(cmdType)});`);
+      out.line("if (validationError) return response(409, { error: validationError });");
+      out.blank();
+      out.line("const version = state.version + 1;");
+      if (firstEvent) {
+        out.line(`const domainEvent = createEvent(${idVar}, version, EventTypes.${eventTypeKey(firstEvent)}, {`);
+        out.push();
+        const ev = [...parts.domainEvent, ...parts.externalEvent].find((e) => e.id === firstEvent);
+        for (const f of (ev && ev.fields) || []) {
+          if (f.axis) continue;
+          out.line(`${camel(f.name)}: ${cmdFields.some((c) => c.name === f.name) ? camel(f.name) : `body.${camel(f.name)}`},`);
+        }
+        out.pop();
+        out.line("});");
+      } else {
+        out.line(`const domainEvent = createEvent(${idVar}, version, 'TODO', body);`);
+      }
+    }
+    out.blank();
+    out.line("await persistEvent(domainEvent);");
+    out.line("await publishToKinesis(domainEvent);");
+    out.line(`return response(${isCreation ? "201" : "200"}, { ${cmdAxis ? camel(cmdAxis) + ": domainEvent.aggregateId, " : ""}version });`);
+    out.pop();
+    out.line("}");
+    out.blank();
+  });
+
+  // Shared event-store + Kinesis helpers (verbatim shape from handler.ts).
+  out.line("async function loadEvents(aggregateId: string): Promise<DomainEvent[]> {");
+  out.push();
+  out.line("const result = await dynamodb.send(");
+  out.push();
+  out.line("new QueryCommand({");
+  out.push();
+  out.line("TableName: TABLE_NAME,");
+  out.line("KeyConditionExpression: 'aggregateId = :id',");
+  out.line("ExpressionAttributeValues: { ':id': aggregateId },");
+  out.line("ScanIndexForward: true, // oldest first");
+  out.pop();
+  out.line("})");
+  out.pop();
+  out.line(");");
+  out.line("return (result.Items || []) as DomainEvent[];");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  out.line("async function persistEvent(domainEvent: DomainEvent): Promise<void> {");
+  out.push();
+  out.line("await dynamodb.send(");
+  out.push();
+  out.line("new PutCommand({");
+  out.push();
+  out.line("TableName: TABLE_NAME,");
+  out.line("Item: domainEvent,");
+  out.line("// Optimistic concurrency: reject if this (aggregateId, version) exists.");
+  out.line("ConditionExpression: 'attribute_not_exists(aggregateId) AND attribute_not_exists(version)',");
+  out.pop();
+  out.line("})");
+  out.pop();
+  out.line(");");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  out.line("async function publishToKinesis(domainEvent: DomainEvent): Promise<void> {");
+  out.push();
+  out.line("await kinesis.send(");
+  out.push();
+  out.line("new PutRecordCommand({");
+  out.push();
+  out.line("StreamName: STREAM_NAME,");
+  out.line("PartitionKey: domainEvent.aggregateId,");
+  out.line("Data: Buffer.from(JSON.stringify(domainEvent)),");
+  out.pop();
+  out.line("})");
+  out.pop();
+  out.line(");");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  out.line("function response(statusCode: number, body: Record<string, unknown>): APIGatewayProxyResult {");
+  out.push();
+  out.line("return {");
+  out.push();
+  out.line("statusCode,");
+  out.line("headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },");
+  out.line("body: JSON.stringify(body),");
+  out.pop();
+  out.line("};");
+  out.pop();
+  out.line("}");
+  out.blank();
+  return true;
+}
+
+// The projector Lambda + query Lambda for a view slice (no command). Mirrors
+// projector/handler.ts (DynamoDB Streams → ioredis) and queries/handler.ts.
+function genAwsProjection(out, parts, model) {
+  if (parts.command.length > 0) return false;
+  const readModels = parts.readModel;
+  if (readModels.length === 0) return false;
+  const rm = readModels[0];
+  const sources = sourceEventsFor(model, parts, rm.id);
+  const knownEvents = new Map([...parts.domainEvent, ...parts.externalEvent].map((e) => [e.id, e]));
+  const view = typeNameFor(rm);
+
+  // ── Projector: DynamoDB Streams → Redis read model.
+  out.line("// ── Projector Lambda (read side) — DynamoDB Streams → Redis ─────────");
+  out.line("// Consumes the event store's stream and folds each source event into the");
+  out.line("// ElastiCache/Redis read model. The read model is disposable: it can be");
+  out.line("// rebuilt at any time by replaying the events.");
+  out.line("import { DynamoDBStreamEvent, DynamoDBRecord } from 'aws-lambda';");
+  out.line("import { unmarshall } from '@aws-sdk/util-dynamodb';");
+  out.line("import { AttributeValue } from '@aws-sdk/client-dynamodb';");
+  out.line("import Redis from 'ioredis';");
+  out.blank();
+  out.line("let redis: Redis;");
+  out.line("function getRedis(): Redis {");
+  out.push();
+  out.line("if (!redis) {");
+  out.push();
+  out.line("redis = new Redis({");
+  out.push();
+  out.line("host: process.env.REDIS_HOST!,");
+  out.line("port: parseInt(process.env.REDIS_PORT || '6379'),");
+  out.line("tls: process.env.REDIS_TLS === 'true' ? {} : undefined,");
+  out.line("connectTimeout: 5000,");
+  out.line("maxRetriesPerRequest: 3,");
+  out.pop();
+  out.line("});");
+  out.pop();
+  out.line("}");
+  out.line("return redis;");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  const keyPrefix = camel(rm.id);
+  out.line("export async function handler(event: DynamoDBStreamEvent): Promise<void> {");
+  out.push();
+  out.line("const client = getRedis();");
+  out.line("for (const record of event.Records) {");
+  out.push();
+  out.line("if (record.eventName !== 'INSERT') continue;");
+  out.line("await processRecord(client, record);");
+  out.pop();
+  out.line("}");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  out.line("async function processRecord(client: Redis, record: DynamoDBRecord): Promise<void> {");
+  out.push();
+  out.line("if (!record.dynamodb?.NewImage) return;");
+  out.line("const item = unmarshall(record.dynamodb.NewImage as Record<string, AttributeValue>) as DomainEvent;");
+  out.line("const { aggregateId, eventType, timestamp, payload } = item;");
+  out.line("switch (eventType) {");
+  out.push();
+  if (sources.length === 0) {
+    out.line("// TODO: no source events wired to this read model in the slice edges.");
+  }
+  for (const evId of sources) {
+    const ev = knownEvents.get(evId);
+    out.line(`case EventTypes.${eventTypeKey(evId)}:`);
+    out.push();
+    out.line(`await on${pascal(evId)}(client, aggregateId, timestamp, payload);`);
+    out.line("break;");
+    out.pop();
+  }
+  out.line("default:");
+  out.push();
+  out.line("console.warn(`Unknown event type: ${eventType}`);");
+  out.pop();
+  out.pop();
+  out.line("}");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  // One handler function per source event: write/merge the read-model record.
+  for (const evId of sources) {
+    const ev = knownEvents.get(evId);
+    out.line(`async function on${pascal(evId)}(`);
+    out.push();
+    out.line("client: Redis,");
+    out.line("aggregateId: string,");
+    out.line("timestamp: string,");
+    out.line("payload: Record<string, unknown>");
+    out.pop();
+    out.line("): Promise<void> {");
+    out.push();
+    out.line(`// Merge ${tsStr(ev ? ev.label : evId)} into the ${view} record.`);
+    out.line(`const existing = await client.get(\`${keyPrefix}:\${aggregateId}\`);`);
+    out.line(`const view: Record<string, unknown> = existing ? JSON.parse(existing) : { ${camel(rm.fields?.find((f) => f.axis)?.name || "id")}: aggregateId };`);
+    for (const f of (ev && ev.fields) || []) {
+      if (f.axis) continue;
+      out.line(`view.${camel(f.name)} = payload.${camel(f.name)};`);
+    }
+    out.line("// TODO: set view.status to the status this event transitions to.");
+    out.line(`const pipeline = client.pipeline();`);
+    out.line(`pipeline.set(\`${keyPrefix}:\${aggregateId}\`, JSON.stringify(view));`);
+    out.line(`pipeline.zadd('${keyPrefix}:all', Date.parse(timestamp).toString(), aggregateId);`);
+    out.line("await pipeline.exec();");
+    out.pop();
+    out.line("}");
+    out.blank();
+  }
+
+  // ── Query Lambda snippet (read the Redis read model behind a GET route).
+  out.line("// ── Query Lambda (read side) — serves GET from the Redis read model ──");
+  out.line("// Reads the projection only; never touches the event store. This is the");
+  out.line("// query half of CQRS (e.g. GET /api/" + keyPrefix + "/{id}).");
+  out.line("export async function queryHandler(");
+  out.push();
+  out.line("event: APIGatewayProxyEvent");
+  out.pop();
+  out.line("): Promise<APIGatewayProxyResult> {");
+  out.push();
+  out.line("const client = getRedis();");
+  out.line("const id = event.pathParameters?.id;");
+  out.line("if (id) {");
+  out.push();
+  out.line(`const data = await client.get(\`${keyPrefix}:\${id}\`);`);
+  out.line("if (!data) return queryResponse(404, { error: 'Not found' });");
+  out.line("return queryResponse(200, JSON.parse(data));");
+  out.pop();
+  out.line("}");
+  out.line(`const ids = await client.zrevrange('${keyPrefix}:all', 0, 49);`);
+  out.line("if (ids.length === 0) return queryResponse(200, []);");
+  out.line("const pipeline = client.pipeline();");
+  out.line(`for (const key of ids) pipeline.get(\`${keyPrefix}:\${key}\`);`);
+  out.line("const results = await pipeline.exec();");
+  out.line("const items = (results || [])");
+  out.push();
+  out.line(".map(([err, data]) => (err ? null : data ? JSON.parse(data as string) : null))");
+  out.line(".filter(Boolean);");
+  out.pop();
+  out.line("return queryResponse(200, items);");
+  out.pop();
+  out.line("}");
+  out.blank();
+  out.line("function queryResponse(statusCode: number, body: unknown): APIGatewayProxyResult {");
+  out.push();
+  out.line("return {");
+  out.push();
+  out.line("statusCode,");
+  out.line("headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },");
+  out.line("body: JSON.stringify(body),");
+  out.pop();
+  out.line("};");
+  out.pop();
+  out.line("}");
+  out.blank();
+  // Query handler needs the API Gateway types imported once.
+  return true;
+}
+
+// Ensure the API Gateway types are imported for a view slice (its query
+// handler uses them but the projector's imports don't include them).
+function genAwsQueryTypeImport(out, parts) {
+  if (parts.command.length > 0) return;
+  if (parts.readModel.length === 0) return;
+  out.line("import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';");
+  out.blank();
+}
+
+// CDK constructs (regional-stack.ts style) for this slice: the event-table
+// reference, the NodejsFunction(s) wired with env + grants, and the API
+// Gateway route (command slice) or the DynamoDB Streams event source +
+// query route (view slice).
+function genAwsCdk(out, parts, sliceName) {
+  const isCommand = parts.command.length > 0;
+  const isView = !isCommand && parts.readModel.length > 0;
+  if (!isCommand && !isView) return;
+
+  const base = pascal((sliceName || "slice").replace(/\.md$/, ""));
+  out.line("// ═══════════════════════════════════════════════════════════════════");
+  out.line("// CDK wiring (regional-stack.ts style). Drop these constructs into the");
+  out.line("// RegionalStack constructor; they reference shared infra (event table,");
+  out.line("// stream, VPC, Redis) already declared there.");
+  out.line("// ═══════════════════════════════════════════════════════════════════");
+  out.line("//");
+  out.line("// import * as cdk from 'aws-cdk-lib';");
+  out.line("// import * as lambda from 'aws-cdk-lib/aws-lambda';");
+  out.line("// import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';");
+  out.line("// import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';");
+  out.line("// import * as apigateway from 'aws-cdk-lib/aws-apigateway';");
+  out.line("// import * as eventsources from 'aws-cdk-lib/aws-lambda-event-sources';");
+  out.line("// import * as path from 'path';");
+  out.line("//");
+
+  if (isCommand) {
+    out.line(`// const ${camel(base)}Command = new nodejs.NodejsFunction(this, '${base}Command', {`);
+    out.line("//   runtime: lambda.Runtime.NODEJS_20_X,");
+    out.line("//   architecture: lambda.Architecture.ARM_64,");
+    out.line(`//   entry: path.join(__dirname, '../../src/${camel(base)}/handler.ts'),`);
+    out.line("//   handler: 'handler',");
+    out.line("//   timeout: cdk.Duration.seconds(10),");
+    out.line("//   environment: {");
+    out.line("//     EVENT_TABLE_NAME: 'LoanEvents',");
+    out.line("//     KINESIS_STREAM_NAME: stream.streamName,");
+    out.line("//   },");
+    out.line("// });");
+    out.line(`// // Grants: read+write the event store, publish to Kinesis.`);
+    out.line(`// props.globalTable.grantReadWriteData(${camel(base)}Command);`);
+    out.line(`// stream.grantWrite(${camel(base)}Command);`);
+    out.line("//");
+    out.line(`// // API Gateway route → the command handler.`);
+    out.line(`// const ${camel(base)}Integration = new apigateway.LambdaIntegration(${camel(base)}Command);`);
+    for (const cmd of parts.command) {
+      const axis = axesOf(cmd)[0];
+      if ((cmd.reads || []).length === 0) {
+        out.line(`// api.root.addResource('api').addResource('${camel(pascal(cmd.id))}s').addMethod('POST', ${camel(base)}Integration);`);
+      } else {
+        out.line(`// // POST /api/${camel(pascal(cmd.id))}s/{id} (routing axis: ${axis || "id"})`);
+        out.line(`// loanByIdResource.addResource('${camel(pascal(cmd.id))}').addMethod('POST', ${camel(base)}Integration);`);
+      }
+    }
+  } else {
+    // View slice: projector wired to DynamoDB Streams + query route.
+    out.line(`// const ${camel(base)}Projector = new nodejs.NodejsFunction(this, '${base}Projector', {`);
+    out.line("//   runtime: lambda.Runtime.NODEJS_20_X,");
+    out.line("//   architecture: lambda.Architecture.ARM_64,");
+    out.line(`//   entry: path.join(__dirname, '../../src/${camel(base)}/projector.ts'),`);
+    out.line("//   handler: 'handler',");
+    out.line("//   timeout: cdk.Duration.seconds(30),");
+    out.line("//   vpc, vpcSubnets: { subnets: vpc.privateSubnets }, securityGroups: [lambdaSg],");
+    out.line("//   environment: { REDIS_HOST: redisEndpoint, REDIS_PORT: redisPort, REDIS_TLS: 'true' },");
+    out.line("// });");
+    out.line(`// // DynamoDB Streams → projector (rebuilds the read model from events).`);
+    out.line(`// props.globalTable.grantStreamRead(${camel(base)}Projector);`);
+    out.line(`// ${camel(base)}Projector.addEventSource(new eventsources.DynamoEventSource(props.globalTable, {`);
+    out.line("//   startingPosition: lambda.StartingPosition.TRIM_HORIZON,");
+    out.line("//   batchSize: 25, retryAttempts: 5, bisectBatchOnError: true,");
+    out.line("// }));");
+    out.line("//");
+    out.line(`// const ${camel(base)}Query = new nodejs.NodejsFunction(this, '${base}Query', {`);
+    out.line("//   runtime: lambda.Runtime.NODEJS_20_X,");
+    out.line("//   architecture: lambda.Architecture.ARM_64,");
+    out.line(`//   entry: path.join(__dirname, '../../src/${camel(base)}/handler.ts'),`);
+    out.line("//   handler: 'queryHandler',");
+    out.line("//   timeout: cdk.Duration.seconds(5),");
+    out.line("//   vpc, vpcSubnets: { subnets: vpc.privateSubnets }, securityGroups: [lambdaSg],");
+    out.line("//   environment: { REDIS_HOST: redisEndpoint, REDIS_PORT: redisPort, REDIS_TLS: 'true' },");
+    out.line("// });");
+    const rm = parts.readModel[0];
+    out.line(`// // GET /api/${camel(rm.id)}/{id} → the query handler (reads Redis only).`);
+    out.line(`// const ${camel(base)}Integration = new apigateway.LambdaIntegration(${camel(base)}Query);`);
+    out.line(`// const ${camel(rm.id)}Resource = api.root.addResource('api').addResource('${camel(rm.id)}');`);
+    out.line(`// ${camel(rm.id)}Resource.addMethod('GET', ${camel(base)}Integration);`);
+    out.line(`// ${camel(rm.id)}Resource.addResource('{id}').addMethod('GET', ${camel(base)}Integration);`);
+  }
+  out.blank();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// AWS-native public API
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Generate AWS-native TypeScript (CDK + Lambda) from an already-parsed model.
+ * @param {object} args
+ * @param {object} args.model  parsed eventModel (parseEventModel output)
+ * @param {object} args.tests  parsed sliceTests (parseSliceTests output)
+ * @param {string} [args.sliceName]  human name for the header comment
+ * @param {Array}  [args.decidedExclusions]
+ * @returns {string} TypeScript source
+ */
+export function generateAwsNative({ model, tests, sliceName, decidedExclusions = [] }) {
+  const out = new Emitter();
+  const parts = partition(model);
+  const producedByCommand = producedByCommandMap(model, parts);
+
+  const name =
+    sliceName ||
+    (model.slices && model.slices[0] && (model.slices[0].label || model.slices[0].id)) ||
+    "slice";
+
+  genAwsHeader(out, name);
+  genAwsUnmappedAndExclusions(out, parts, producedByCommand, decidedExclusions);
+  genAwsQueryTypeImport(out, parts);
+  genAwsEventTypes(out, parts);
+  genAwsInterfaces(out, parts);
+  genAwsCreateEvent(out, parts);
+  genAwsAggregate(out, parts, model, tests);
+
+  const madeHandler = genAwsCommandHandler(out, parts, model);
+  if (!madeHandler) genAwsProjection(out, parts, model);
+
+  genAwsCdk(out, parts, name);
+
+  return out.toString();
+}
+
+/**
+ * Convenience: generate AWS-native TypeScript directly from a slice `.md`
+ * (or raw DSL) string. Mirrors generateFromSource for the Java target.
+ * @param {string} src  slice spec markdown or raw DSL
+ * @param {object} [opts]
+ * @param {string} [opts.sliceName]
+ * @returns {string} TypeScript source
+ */
+export function generateAwsFromSource(src, opts = {}) {
+  const model = parseEventModel(src);
+  const tests = parseSliceTests(src);
+  const decidedExclusions = parseDecidedExclusions(src);
+  return generateAwsNative({ model, tests, sliceName: opts.sliceName, decidedExclusions });
+}
