@@ -169,7 +169,7 @@
 import mermaid from 'mermaid';
 import { marked } from 'marked';
 import diagramDefinitions from './index.js';
-import { generateFromSource } from './codegen.js';
+import { generateFromSource, generateManifestFromSource } from './codegen.js';
 
 await mermaid.registerExternalDiagrams(diagramDefinitions);
 mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
@@ -290,7 +290,12 @@ function attachCodegenPanel(container, src, sliceName) {
   dlBtn.textContent = 'Download .java';
   dlBtn.disabled = true;
 
-  bar.append(genBtn, copyBtn, dlBtn);
+  const manifestBtn = document.createElement('button');
+  manifestBtn.type = 'button';
+  manifestBtn.textContent = 'Download manifest.json';
+  manifestBtn.disabled = true;
+
+  bar.append(genBtn, copyBtn, dlBtn, manifestBtn);
 
   const output = document.createElement('pre');
   output.className = 'codegen-output empty';
@@ -314,6 +319,7 @@ function attachCodegenPanel(container, src, sliceName) {
       output.classList.remove('empty');
       copyBtn.disabled = false;
       dlBtn.disabled = false;
+      manifestBtn.disabled = false;
       genBtn.textContent = 'Regenerate';
     } catch (err) {
       console.error('codegen failed', err);
@@ -357,6 +363,28 @@ function attachCodegenPanel(container, src, sliceName) {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  });
+
+  // The binding manifest: the stack-independent core (what a migration is
+  // checked against) plus the disposable binding section. Generated on demand.
+  manifestBtn.addEventListener('click', () => {
+    const label = manifestBtn.textContent;
+    try {
+      const manifest = generateManifestFromSource(src, { sliceName });
+      const blob = new Blob([manifest], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (sliceName || 'slice').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() + '.manifest.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('manifest generation failed', err);
+      manifestBtn.textContent = 'Failed';
+      setTimeout(() => { manifestBtn.textContent = label; }, 1600);
+    }
   });
 
   return panel;
