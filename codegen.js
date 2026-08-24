@@ -1424,17 +1424,10 @@ function genAwsCommandHandler(out, parts, model) {
   out.line("// ── Command Lambda (write side) ─────────────────────────────────────");
   out.line("// API Gateway → this handler. The DCB `reads` boundary becomes a");
   out.line("// DynamoDB query keyed by aggregateId; the new event is persisted with");
-  out.line("// optimistic concurrency (version) and published to Kinesis.");
+  out.line("// optimistic concurrency (version) and published to Kinesis. The event");
+  out.line("// store, Kinesis, and response helpers come from the shared runtime.");
   out.line("import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';");
-  out.line("import { DynamoDBClient } from '@aws-sdk/client-dynamodb';");
-  out.line("import { DynamoDBDocumentClient, QueryCommand, PutCommand } from '@aws-sdk/lib-dynamodb';");
-  out.line("import { KinesisClient, PutRecordCommand } from '@aws-sdk/client-kinesis';");
   out.line("import { v4 as uuidv4 } from 'uuid';");
-  out.blank();
-  out.line("const dynamodb = DynamoDBDocumentClient.from(new DynamoDBClient({}));");
-  out.line("const kinesis = new KinesisClient({});");
-  out.line("const TABLE_NAME = process.env.EVENT_TABLE_NAME!;");
-  out.line("const STREAM_NAME = process.env.KINESIS_STREAM_NAME!;");
   out.blank();
 
   out.line("export async function handler(");
@@ -1478,12 +1471,18 @@ function genAwsCommandHandler(out, parts, model) {
     out.line("): Promise<APIGatewayProxyResult> {");
     out.push();
 
-    // Destructure the command fields from the request body.
+    // Command fields available to build the event payload (axis-tag fields
+    // are keyed separately, so they are excluded from the payload set).
     const cmdFields = (cmd.fields || []).filter((f) => !f.axis);
-    if (cmdFields.length) {
-      out.line(`const { ${cmdFields.map((f) => camel(f.name)).join(", ")} } = body as {`);
+    // For a non-creation command the routing id (the axis field, e.g. loanId)
+    // is bound from the path/body as its own `const`, so it must NOT also be
+    // destructured here — that would redeclare the same block-scoped variable.
+    const routingName = !isCreation && cmdAxis ? camel(cmdAxis) : null;
+    const destructured = cmdFields.filter((f) => camel(f.name) !== routingName);
+    if (destructured.length) {
+      out.line(`const { ${destructured.map((f) => camel(f.name)).join(", ")} } = body as {`);
       out.push();
-      for (const f of cmdFields) out.line(`${camel(f.name)}?: ${tsType(f.type)};`);
+      for (const f of destructured) out.line(`${camel(f.name)}?: ${tsType(f.type)};`);
       out.pop();
       out.line("};");
     }
@@ -1542,73 +1541,8 @@ function genAwsCommandHandler(out, parts, model) {
     out.blank();
   });
 
-  // Shared event-store + Kinesis helpers (verbatim shape from handler.ts).
-  out.line("async function loadEvents(aggregateId: string): Promise<DomainEvent[]> {");
-  out.push();
-  out.line("const result = await dynamodb.send(");
-  out.push();
-  out.line("new QueryCommand({");
-  out.push();
-  out.line("TableName: TABLE_NAME,");
-  out.line("KeyConditionExpression: 'aggregateId = :id',");
-  out.line("ExpressionAttributeValues: { ':id': aggregateId },");
-  out.line("ScanIndexForward: true, // oldest first");
-  out.pop();
-  out.line("})");
-  out.pop();
-  out.line(");");
-  out.line("return (result.Items || []) as DomainEvent[];");
-  out.pop();
-  out.line("}");
-  out.blank();
-
-  out.line("async function persistEvent(domainEvent: DomainEvent): Promise<void> {");
-  out.push();
-  out.line("await dynamodb.send(");
-  out.push();
-  out.line("new PutCommand({");
-  out.push();
-  out.line("TableName: TABLE_NAME,");
-  out.line("Item: domainEvent,");
-  out.line("// Optimistic concurrency: reject if this (aggregateId, version) exists.");
-  out.line("ConditionExpression: 'attribute_not_exists(aggregateId) AND attribute_not_exists(version)',");
-  out.pop();
-  out.line("})");
-  out.pop();
-  out.line(");");
-  out.pop();
-  out.line("}");
-  out.blank();
-
-  out.line("async function publishToKinesis(domainEvent: DomainEvent): Promise<void> {");
-  out.push();
-  out.line("await kinesis.send(");
-  out.push();
-  out.line("new PutRecordCommand({");
-  out.push();
-  out.line("StreamName: STREAM_NAME,");
-  out.line("PartitionKey: domainEvent.aggregateId,");
-  out.line("Data: Buffer.from(JSON.stringify(domainEvent)),");
-  out.pop();
-  out.line("})");
-  out.pop();
-  out.line(");");
-  out.pop();
-  out.line("}");
-  out.blank();
-
-  out.line("function response(statusCode: number, body: Record<string, unknown>): APIGatewayProxyResult {");
-  out.push();
-  out.line("return {");
-  out.push();
-  out.line("statusCode,");
-  out.line("headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },");
-  out.line("body: JSON.stringify(body),");
-  out.pop();
-  out.line("};");
-  out.pop();
-  out.line("}");
-  out.blank();
+  // loadEvents / persistEvent / publishToKinesis / response are imported from
+  // the shared runtime — this file carries only the slice-specific logic.
   return true;
 }
 
@@ -1627,31 +1561,12 @@ function genAwsProjection(out, parts, model) {
   out.line("// ── Projector Lambda (read side) — DynamoDB Streams → Redis ─────────");
   out.line("// Consumes the event store's stream and folds each source event into the");
   out.line("// ElastiCache/Redis read model. The read model is disposable: it can be");
-  out.line("// rebuilt at any time by replaying the events.");
-  out.line("import { DynamoDBStreamEvent, DynamoDBRecord } from 'aws-lambda';");
+  out.line("// rebuilt at any time by replaying the events. The Redis client and the");
+  out.line("// response helper come from the shared runtime.");
+  out.line("import { APIGatewayProxyEvent, APIGatewayProxyResult, DynamoDBStreamEvent, DynamoDBRecord } from 'aws-lambda';");
   out.line("import { unmarshall } from '@aws-sdk/util-dynamodb';");
   out.line("import { AttributeValue } from '@aws-sdk/client-dynamodb';");
   out.line("import Redis from 'ioredis';");
-  out.blank();
-  out.line("let redis: Redis;");
-  out.line("function getRedis(): Redis {");
-  out.push();
-  out.line("if (!redis) {");
-  out.push();
-  out.line("redis = new Redis({");
-  out.push();
-  out.line("host: process.env.REDIS_HOST!,");
-  out.line("port: parseInt(process.env.REDIS_PORT || '6379'),");
-  out.line("tls: process.env.REDIS_TLS === 'true' ? {} : undefined,");
-  out.line("connectTimeout: 5000,");
-  out.line("maxRetriesPerRequest: 3,");
-  out.pop();
-  out.line("});");
-  out.pop();
-  out.line("}");
-  out.line("return redis;");
-  out.pop();
-  out.line("}");
   out.blank();
 
   const keyPrefix = camel(rm.id);
@@ -1740,12 +1655,12 @@ function genAwsProjection(out, parts, model) {
   out.line("if (id) {");
   out.push();
   out.line(`const data = await client.get(\`${keyPrefix}:\${id}\`);`);
-  out.line("if (!data) return queryResponse(404, { error: 'Not found' });");
-  out.line("return queryResponse(200, JSON.parse(data));");
+  out.line("if (!data) return response(404, { error: 'Not found' });");
+  out.line("return response(200, JSON.parse(data));");
   out.pop();
   out.line("}");
   out.line(`const ids = await client.zrevrange('${keyPrefix}:all', 0, 49);`);
-  out.line("if (ids.length === 0) return queryResponse(200, []);");
+  out.line("if (ids.length === 0) return response(200, []);");
   out.line("const pipeline = client.pipeline();");
   out.line(`for (const key of ids) pipeline.get(\`${keyPrefix}:\${key}\`);`);
   out.line("const results = await pipeline.exec();");
@@ -1754,33 +1669,12 @@ function genAwsProjection(out, parts, model) {
   out.line(".map(([err, data]) => (err ? null : data ? JSON.parse(data as string) : null))");
   out.line(".filter(Boolean);");
   out.pop();
-  out.line("return queryResponse(200, items);");
+  out.line("return response(200, items);");
   out.pop();
   out.line("}");
   out.blank();
-  out.line("function queryResponse(statusCode: number, body: unknown): APIGatewayProxyResult {");
-  out.push();
-  out.line("return {");
-  out.push();
-  out.line("statusCode,");
-  out.line("headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },");
-  out.line("body: JSON.stringify(body),");
-  out.pop();
-  out.line("};");
-  out.pop();
-  out.line("}");
-  out.blank();
-  // Query handler needs the API Gateway types imported once.
+  // response() is imported from the shared runtime.
   return true;
-}
-
-// Ensure the API Gateway types are imported for a view slice (its query
-// handler uses them but the projector's imports don't include them).
-function genAwsQueryTypeImport(out, parts) {
-  if (parts.command.length > 0) return;
-  if (parts.readModel.length === 0) return;
-  out.line("import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';");
-  out.blank();
 }
 
 // CDK constructs (regional-stack.ts style) for this slice: the event-table
@@ -1872,20 +1766,286 @@ function genAwsCdk(out, parts, sliceName) {
   out.blank();
 }
 
+// The relative import path a per-slice file uses to reach the shared runtime.
+// Slice handlers live at src/<slice>/handler.ts; the shared runtime at
+// src/shared/event-store.ts — so the import is one level up.
+const AWS_SHARED_MODULE = "../shared/event-store";
+
+// The list of symbols the shared runtime exports and a per-slice file imports.
+// Kept here so the emitted import statement and the shared module stay in sync.
+function awsSharedImports(parts) {
+  const isCommand = parts.command.length > 0;
+  const base = ["DomainEvent", "EventTypes", "createEvent", "response"];
+  if (isCommand) {
+    return [...base, "loadEvents", "persistEvent", "publishToKinesis"];
+  }
+  // View slice: the projector/query need the Redis accessor instead of the
+  // event-store writers.
+  return [...base, "getRedis"];
+}
+
+// ── Shared runtime (model level) ───────────────────────────────────────────
+// Emitted ONCE from the whole model, not per slice. This is the common part:
+// the stored-event envelope, the merged EventTypes map (every event across all
+// slices), the createEvent factory, and the event-store / Kinesis / Redis
+// plumbing that every slice handler reuses. Slices import from here instead of
+// re-emitting it, so N slices no longer produce N copies of the infrastructure.
+
+// The merged EventTypes map: every domain/external event declared anywhere in
+// the model, deduped by stored name, ordered by first appearance.
+function genAwsSharedEventTypes(out, allEvents) {
+  out.line("// ── Domain events — immutable facts in the DynamoDB event store ──────");
+  out.line("// The stored envelope; `eventType` is the language-independent stored name.");
+  out.line("export interface DomainEvent {");
+  out.push();
+  out.line("aggregateId: string;");
+  out.line("version: number;");
+  out.line("eventType: string;");
+  out.line("timestamp: string;");
+  out.line("payload: Record<string, unknown>;");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  if (allEvents.length > 0) {
+    out.line("// Every stored event name in the model — the migration contract. Merged");
+    out.line("// across all slices so there is a single source of truth for event names.");
+    out.line("export const EventTypes = {");
+    out.push();
+    const seen = new Set();
+    for (const ev of allEvents) {
+      const key = eventTypeKey(ev);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.line(`${key}: ${tsStr(tsEventName(ev))},`);
+    }
+    out.pop();
+    out.line("} as const;");
+    out.blank();
+  }
+}
+
+// The shared event-store + Kinesis + Redis runtime: the exact helpers the
+// per-slice handlers call. Emitted once at src/shared/event-store.ts.
+function genAwsSharedRuntime(out) {
+  out.line("// ── AWS clients + config (shared by every handler) ──────────────────");
+  out.line("import { APIGatewayProxyResult } from 'aws-lambda';");
+  out.line("import { DynamoDBClient } from '@aws-sdk/client-dynamodb';");
+  out.line("import { DynamoDBDocumentClient, QueryCommand, PutCommand } from '@aws-sdk/lib-dynamodb';");
+  out.line("import { KinesisClient, PutRecordCommand } from '@aws-sdk/client-kinesis';");
+  out.line("import Redis from 'ioredis';");
+  out.blank();
+  out.line("const dynamodb = DynamoDBDocumentClient.from(new DynamoDBClient({}));");
+  out.line("const kinesis = new KinesisClient({});");
+  out.line("const TABLE_NAME = process.env.EVENT_TABLE_NAME!;");
+  out.line("const STREAM_NAME = process.env.KINESIS_STREAM_NAME!;");
+  out.blank();
+
+  out.line("// Factory for a stored event (stamps the ISO timestamp).");
+  out.line("export function createEvent(");
+  out.push();
+  out.line("aggregateId: string,");
+  out.line("version: number,");
+  out.line("eventType: string,");
+  out.line("payload: Record<string, unknown>");
+  out.pop();
+  out.line("): DomainEvent {");
+  out.push();
+  out.line("return { aggregateId, version, eventType, timestamp: new Date().toISOString(), payload };");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  out.line("// Load an aggregate's full event stream (oldest first) for replay.");
+  out.line("export async function loadEvents(aggregateId: string): Promise<DomainEvent[]> {");
+  out.push();
+  out.line("const result = await dynamodb.send(");
+  out.push();
+  out.line("new QueryCommand({");
+  out.push();
+  out.line("TableName: TABLE_NAME,");
+  out.line("KeyConditionExpression: 'aggregateId = :id',");
+  out.line("ExpressionAttributeValues: { ':id': aggregateId },");
+  out.line("ScanIndexForward: true, // oldest first");
+  out.pop();
+  out.line("})");
+  out.pop();
+  out.line(");");
+  out.line("return (result.Items || []) as DomainEvent[];");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  out.line("// Persist a new event with optimistic concurrency on (aggregateId, version).");
+  out.line("export async function persistEvent(domainEvent: DomainEvent): Promise<void> {");
+  out.push();
+  out.line("await dynamodb.send(");
+  out.push();
+  out.line("new PutCommand({");
+  out.push();
+  out.line("TableName: TABLE_NAME,");
+  out.line("Item: domainEvent,");
+  out.line("ConditionExpression: 'attribute_not_exists(aggregateId) AND attribute_not_exists(version)',");
+  out.pop();
+  out.line("})");
+  out.pop();
+  out.line(");");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  out.line("// Publish an event to Kinesis for downstream consumers.");
+  out.line("export async function publishToKinesis(domainEvent: DomainEvent): Promise<void> {");
+  out.push();
+  out.line("await kinesis.send(");
+  out.push();
+  out.line("new PutRecordCommand({");
+  out.push();
+  out.line("StreamName: STREAM_NAME,");
+  out.line("PartitionKey: domainEvent.aggregateId,");
+  out.line("Data: Buffer.from(JSON.stringify(domainEvent)),");
+  out.pop();
+  out.line("})");
+  out.pop();
+  out.line(");");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  out.line("// Lazily-initialised Redis (ElastiCache) client for the read side.");
+  out.line("let redis: Redis;");
+  out.line("export function getRedis(): Redis {");
+  out.push();
+  out.line("if (!redis) {");
+  out.push();
+  out.line("redis = new Redis({");
+  out.push();
+  out.line("host: process.env.REDIS_HOST!,");
+  out.line("port: parseInt(process.env.REDIS_PORT || '6379'),");
+  out.line("tls: process.env.REDIS_TLS === 'true' ? {} : undefined,");
+  out.line("connectTimeout: 5000,");
+  out.line("maxRetriesPerRequest: 3,");
+  out.pop();
+  out.line("});");
+  out.pop();
+  out.line("}");
+  out.line("return redis;");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  out.line("// Shared API Gateway JSON response helper.");
+  out.line("export function response(statusCode: number, body: unknown): APIGatewayProxyResult {");
+  out.push();
+  out.line("return {");
+  out.push();
+  out.line("statusCode,");
+  out.line("headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },");
+  out.line("body: JSON.stringify(body),");
+  out.pop();
+  out.line("};");
+  out.pop();
+  out.line("}");
+  out.blank();
+}
+
+// The shared CDK infrastructure: the global DynamoDB event table, the Kinesis
+// stream, and the API Gateway root — declared once from the whole model, not
+// per slice. Per-slice fragments attach their Lambda + route to these.
+function genAwsSharedInfra(out, allEvents) {
+  out.line("// ═══════════════════════════════════════════════════════════════════");
+  out.line("// Shared infrastructure (infra/stacks/regional-stack.ts). Declared ONCE");
+  out.line("// from the whole model. Per-slice CDK fragments attach their Lambda and");
+  out.line("// route to the constructs below via stack props — they never redeclare");
+  out.line("// the table, stream, VPC, Redis, or API.");
+  out.line("// ═══════════════════════════════════════════════════════════════════");
+  out.line("//");
+  out.line("// import * as cdk from 'aws-cdk-lib';");
+  out.line("// import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';");
+  out.line("// import * as kinesis from 'aws-cdk-lib/aws-kinesis';");
+  out.line("// import * as apigateway from 'aws-cdk-lib/aws-apigateway';");
+  out.line("//");
+  out.line("// // Event store — DynamoDB (global table lives in the global stack).");
+  out.line("// const eventTable = new dynamodb.Table(this, 'LoanEvents', {");
+  out.line("//   partitionKey: { name: 'aggregateId', type: dynamodb.AttributeType.STRING },");
+  out.line("//   sortKey:      { name: 'version',     type: dynamodb.AttributeType.NUMBER },");
+  out.line("//   stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,");
+  out.line("//   billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,");
+  out.line("// });");
+  out.line("//");
+  out.line("// // Event distribution — Kinesis.");
+  out.line("// const stream = new kinesis.Stream(this, 'LoanEventStream', { shardCount: 2 });");
+  out.line("//");
+  out.line("// // API Gateway root shared by every slice route.");
+  out.line("// const api = new apigateway.RestApi(this, 'LoanApi', { restApiName: 'loan-originations' });");
+  out.line("// const apiRoot = api.root.addResource('api');");
+  out.line("//");
+  out.line("// // Pass these to each slice fragment as props: { eventTable, stream, api, apiRoot }.");
+  out.blank();
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // AWS-native public API
 // ─────────────────────────────────────────────────────────────────────────
 
+// Header for the shared-runtime (model-level) output.
+function genAwsSharedHeader(out, modelName) {
+  out.line("// ─────────────────────────────────────────────────────────────");
+  out.line(`// Shared runtime for model: ${modelName}`);
+  out.line("// Target: AWS-native (CDK + Lambda, TypeScript)");
+  out.line("// The COMMON part — emitted once from the whole model. Contains the");
+  out.line("// stored-event envelope, the merged EventTypes map, the createEvent");
+  out.line("// factory, the DynamoDB/Kinesis/Redis runtime, and the shared CDK infra.");
+  out.line("// Each slice imports from './shared/event-store' instead of re-emitting it.");
+  out.line("// Source of truth is the model .md — regenerate, don't hand-edit.");
+  out.line("// ─────────────────────────────────────────────────────────────");
+  out.blank();
+}
+
+// Emit the per-slice import of the shared runtime symbols.
+function genAwsSliceImports(out, parts) {
+  const names = awsSharedImports(parts);
+  out.line(`import { ${names.join(", ")} } from ${tsStr(AWS_SHARED_MODULE)};`);
+  out.blank();
+}
+
+// Generate the model-level shared runtime + infra (the common part).
+function generateAwsShared({ model, sliceName }) {
+  const out = new Emitter();
+  const parts = partition(model);
+  const allEvents = [...parts.domainEvent, ...parts.externalEvent];
+  const name = sliceName || "model";
+  genAwsSharedHeader(out, name);
+  genAwsSharedEventTypes(out, allEvents);
+  genAwsSharedRuntime(out);
+  genAwsSharedInfra(out, allEvents);
+  return out.toString();
+}
+
 /**
  * Generate AWS-native TypeScript (CDK + Lambda) from an already-parsed model.
+ *
+ * Two parts, decoupled:
+ *   - part: 'runtime' — the COMMON code, emitted once from the whole model:
+ *       the DomainEvent envelope, the merged EventTypes map, createEvent, the
+ *       DynamoDB/Kinesis/Redis runtime, and the shared CDK infra.
+ *   - part: 'slice' (default) — ONLY this slice's own code: its command/event
+ *       interfaces, the aggregate (rehydrate/applyEvent/validateCommand), the
+ *       route handler, and the CDK fragment — importing the shared runtime.
+ *
  * @param {object} args
  * @param {object} args.model  parsed eventModel (parseEventModel output)
  * @param {object} args.tests  parsed sliceTests (parseSliceTests output)
  * @param {string} [args.sliceName]  human name for the header comment
  * @param {Array}  [args.decidedExclusions]
+ * @param {('runtime'|'slice')} [args.part='slice']
  * @returns {string} TypeScript source
  */
-export function generateAwsNative({ model, tests, sliceName, decidedExclusions = [] }) {
+export function generateAwsNative({ model, tests, sliceName, decidedExclusions = [], part = "slice" }) {
+  if (part === "runtime") {
+    return generateAwsShared({ model, sliceName });
+  }
+
   const out = new Emitter();
   const parts = partition(model);
   const producedByCommand = producedByCommandMap(model, parts);
@@ -1897,10 +2057,10 @@ export function generateAwsNative({ model, tests, sliceName, decidedExclusions =
 
   genAwsHeader(out, name);
   genAwsUnmappedAndExclusions(out, parts, producedByCommand, decidedExclusions);
-  genAwsQueryTypeImport(out, parts);
-  genAwsEventTypes(out, parts);
+  // The slice imports the common runtime instead of re-emitting the envelope,
+  // EventTypes, createEvent, and the event-store/Kinesis/Redis helpers.
+  genAwsSliceImports(out, parts);
   genAwsInterfaces(out, parts);
-  genAwsCreateEvent(out, parts);
   genAwsAggregate(out, parts, model, tests);
 
   const madeHandler = genAwsCommandHandler(out, parts, model);
@@ -1914,14 +2074,28 @@ export function generateAwsNative({ model, tests, sliceName, decidedExclusions =
 /**
  * Convenience: generate AWS-native TypeScript directly from a slice `.md`
  * (or raw DSL) string. Mirrors generateFromSource for the Java target.
+ *
+ * When the source is the whole model (the `__model` view) or `opts.part` is
+ * 'runtime', this emits the shared runtime. Otherwise it emits just the slice.
+ *
  * @param {string} src  slice spec markdown or raw DSL
  * @param {object} [opts]
  * @param {string} [opts.sliceName]
+ * @param {('runtime'|'slice')} [opts.part]  force a part; otherwise inferred
  * @returns {string} TypeScript source
  */
 export function generateAwsFromSource(src, opts = {}) {
   const model = parseEventModel(src);
   const tests = parseSliceTests(src);
   const decidedExclusions = parseDecidedExclusions(src);
-  return generateAwsNative({ model, tests, sliceName: opts.sliceName, decidedExclusions });
+  // Infer: a source declaring more than one slice is the whole model → runtime.
+  const part =
+    opts.part || ((model.slices && model.slices.length > 1) ? "runtime" : "slice");
+  return generateAwsNative({
+    model,
+    tests,
+    sliceName: opts.sliceName,
+    decidedExclusions,
+    part,
+  });
 }
