@@ -445,6 +445,31 @@ function layoutEventModel(model) {
   };
 
   // Bucket into (lane, col); multiple elements in the same cell stack vertically.
+  // Two read models fed by the same event are both anchored to that event's
+  // column by the duplicate expander, which lands them in one lane/column cell
+  // and stacks them vertically. They are distinct projections, so give each
+  // extra its own column instead — shifting everything to the right along with
+  // it. Stacking would read as containment.
+  {
+    const occupied = new Set();
+    const ordered = elements
+      .slice()
+      .sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
+    for (const el of ordered) {
+      let col = rank.get(el.id);
+      const laneKey = laneKeyOf(el);
+      if (!occupied.has(laneKey + "|" + col)) {
+        occupied.add(laneKey + "|" + col);
+        continue;
+      }
+      // Open a fresh column immediately after this one and move the element
+      // into it, pushing every later column right to make room.
+      for (const [id, c] of rank) if (c > col) rank.set(id, c + 1);
+      rank.set(el.id, col + 1);
+      occupied.add(laneKey + "|" + (col + 1));
+    }
+  }
+
   const cells = new Map();
   for (const el of elements) {
     const laneKey = laneKeyOf(el);
@@ -622,14 +647,13 @@ function layoutEventModel(model) {
     }
   }
 
-  // Compute bounding boxes for each slice. When a slice's members form
-  // distant column clusters (e.g. a per-event read slice with the event on
-  // the left and the consuming UI on the right of a fan-in pattern), emit
-  // ONE box per cluster so the slice doesn't stretch across the whole
-  // diagram. The slice label appears on the leftmost cluster only.
+  // Exactly one bounding box per slice. An earlier version split a slice whose
+  // members fell into distant column clusters, but two boxes read as two
+  // slices. A wide box is the honest picture: it means the slice's members
+  // really are far apart, which happens when a read model's own output feeds
+  // back into it (see the cycle note in `expandReadModelDuplicates`).
   const SLICE_PAD = 10;
   const SLICE_LABEL_H = 20;
-  const SLICE_CLUSTER_GAP = 3; // cols of empty space that triggers a split
   const sliceRects = [];
   for (const s of model.slices || []) {
     const members = s.nodeIds
@@ -638,36 +662,37 @@ function layoutEventModel(model) {
       .sort((a, b) => a.col - b.col);
     if (members.length === 0) continue;
 
-    // Group consecutive members into clusters separated by column gaps.
-    const clusters = [[members[0]]];
-    for (let i = 1; i < members.length; i++) {
-      const lastCol = clusters[clusters.length - 1].slice(-1)[0].col;
-      if (members[i].col - lastCol < SLICE_CLUSTER_GAP) {
-        clusters[clusters.length - 1].push(members[i]);
-      } else {
-        clusters.push([members[i]]);
-      }
-    }
-
-    clusters.forEach((cluster, idx) => {
+    [members].forEach((cluster) => {
+      // One rectangle bounding every member of the cluster. Slices are shown
+      // one at a time, so a plain box no longer collides with its neighbours,
+      // and it reads far better than an outline snaking between the elements.
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const m of cluster) {
-        const p = m.pos;
-        if (p.x < minX) minX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.x + p.w > maxX) maxX = p.x + p.w;
-        if (p.y + p.h > maxY) maxY = p.y + p.h;
+        const q = m.pos;
+        if (q.x < minX) minX = q.x;
+        if (q.y < minY) minY = q.y;
+        if (q.x + q.w > maxX) maxX = q.x + q.w;
+        if (q.y + q.h > maxY) maxY = q.y + q.h;
       }
-      const isLeading = idx === 0;
-      const headPad = isLeading ? SLICE_LABEL_H : 0;
-      sliceRects.push({
-        id: clusters.length > 1 ? `${s.id}__c${idx}` : s.id,
-        sliceId: s.id,
-        label: isLeading ? s.label : "",
+      const box = {
         x: minX - SLICE_PAD,
-        y: minY - SLICE_PAD - headPad,
+        y: minY - SLICE_PAD,
         w: (maxX - minX) + SLICE_PAD * 2,
-        h: (maxY - minY) + SLICE_PAD * 2 + headPad,
+        h: (maxY - minY) + SLICE_PAD * 2,
+      };
+
+      sliceRects.push({
+        id: s.id,
+        sliceId: s.id,
+        label: s.label,
+        box,
+        x: box.x,
+        y: box.y,
+        w: box.w,
+        h: box.h,
+        labelX: box.x + box.w / 2,
+        labelY: box.y - SLICE_LABEL_H,
+        labelW: Math.max(60, (s.label || "").length * 6.5 + 16),
         labelH: SLICE_LABEL_H,
       });
     });
@@ -678,25 +703,33 @@ function layoutEventModel(model) {
   // any conflicting slice's box upward (its top edge moves up; the bottom
   // stays anchored to its members) until its label clears all earlier ones.
   const labelGap = 4;
-  const sortedSlices = sliceRects.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  const labelBox = (r) => ({
+    x: r.labelX - r.labelW / 2,
+    w: r.labelW,
+    y: r.labelY,
+    h: r.labelH,
+  });
+  const sortedSlices = sliceRects
+    .slice()
+    .sort((a, b) => a.labelX - b.labelX || a.labelY - b.labelY);
   for (let i = 0; i < sortedSlices.length; i++) {
     const a = sortedSlices[i];
     if (!a.label) continue;
     let safety = 100;
     while (safety-- > 0) {
+      const ab = labelBox(a);
       let conflict = null;
       for (let j = 0; j < i; j++) {
         const b = sortedSlices[j];
         if (!b.label) continue;
-        const xOverlap = !(b.x + b.w <= a.x || a.x + a.w <= b.x);
+        const bb = labelBox(b);
+        const xOverlap = !(bb.x + bb.w <= ab.x || ab.x + ab.w <= bb.x);
         if (!xOverlap) continue;
-        const yOverlap = !(b.y + b.labelH <= a.y || a.y + a.labelH <= b.y);
-        if (yOverlap) { conflict = b; break; }
+        const yOverlap = !(bb.y + bb.h <= ab.y || ab.y + ab.h <= bb.y);
+        if (yOverlap) { conflict = bb; break; }
       }
       if (!conflict) break;
-      const shift = conflict.y + conflict.labelH + labelGap - a.y;
-      a.y -= shift;
-      a.h += shift;
+      a.labelY -= conflict.y + conflict.h + labelGap - ab.y;
     }
   }
 
@@ -704,17 +737,24 @@ function layoutEventModel(model) {
   // diagram down so labels stay inside the viewBox.
   let extraTop = 0;
   for (const sr of sliceRects) {
-    if (sr.y < -extraTop) extraTop = -sr.y;
+    if (sr.labelY < -extraTop) extraTop = -sr.labelY;
   }
   if (extraTop > 0) {
     extraTop += labelGap;
     for (const lr of laneRects) lr.y += extraTop;
     for (const p of pos.values()) p.y += extraTop;
-    for (const sr of sliceRects) sr.y += extraTop;
+    for (const sr of sliceRects) {
+      sr.y += extraTop;
+      sr.labelY += extraTop;
+      sr.box.y += extraTop;
+    }
     totalH += extraTop;
   }
 
-  return { lanes: laneRects, pos, edges, elements, slices: sliceRects, totalW, totalH, MARGIN_L, NODE_H_BASE };
+  const sliceMembers = new Map(
+    (model.slices || []).map((s) => [s.id, s.nodeIds.slice()])
+  );
+  return { lanes: laneRects, pos, edges, elements, slices: sliceRects, sliceMembers, totalW, totalH, MARGIN_L, NODE_H_BASE };
 }
 
 const NODE_STYLES = {
@@ -825,37 +865,76 @@ export function drawInto(svg, model, L) {
   // --- Slices -------------------------------------------------------------
   // Dashed bounding box around each vertical slice's member nodes, with the
   // slice label centered at the top inside the box.
+  // Each slice draws one band per lane it occupies, joined by vertical stems.
+  // Bands are hidden until the slice is selected — 24 always-on boxes over 48
+  // nodes read as noise, and every producer/consumer seam makes two of them
+  // overlap by exactly one column. The always-visible part is the label chip;
+  // hovering it (or any member node) reveals that slice alone.
+  // The slug matches the per-slice spec filename that `spec-slices` writes, so
+  // a host page can route a chip click to that file. Routing itself belongs to
+  // the host, not here — the renderer only publishes the slug.
+  const sliceSlug = (label) =>
+    label
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") + ".md";
+
   const sliceG = gSlices
     .selectAll("g.slice")
     .data(L.slices || [], (d) => d.id)
     .join("g")
-    .attr("class", "slice");
+    .attr("class", "slice")
+    .attr("data-slice-id", (d) => d.sliceId)
+    .attr("data-slice-slug", (d) => (d.label ? sliceSlug(d.label) : null));
 
-  sliceG
+  const bandsG = sliceG
+    .append("g")
+    .attr("class", "slice-bands")
+    .attr("opacity", 0)
+    .attr("pointer-events", "none");
+
+  bandsG
     .append("rect")
-    .attr("x", (d) => d.x)
-    .attr("y", (d) => d.y)
-    .attr("width", (d) => d.w)
-    .attr("height", (d) => d.h)
+    .attr("x", (d) => d.box.x)
+    .attr("y", (d) => d.box.y)
+    .attr("width", (d) => d.box.w)
+    .attr("height", (d) => d.box.h)
     .attr("rx", 6)
     .attr("ry", 6)
-    .attr("fill", "none")
-    .attr("stroke", "#64748b")
+    .attr("fill", "#64748b")
+    .attr("fill-opacity", 0.06)
+    .attr("stroke", "#334155")
     .attr("stroke-width", 1.5)
-    .attr("stroke-dasharray", "4 3")
-    .attr("pointer-events", "stroke")
-    .attr("cursor", "pointer")
-    .attr("onmouseenter", "this.setAttribute('stroke-width','3.5');this.setAttribute('stroke','#334155')")
-    .attr("onmouseleave", "this.setAttribute('stroke-width','1.5');this.setAttribute('stroke','#64748b')");
+    .attr("stroke-dasharray", "4 3");
 
-  sliceG
+  const labelG = sliceG
+    .filter((d) => !!d.label)
+    .append("g")
+    .attr("class", "slice-label")
+    .attr("cursor", "pointer");
+
+  labelG
+    .append("rect")
+    .attr("x", (d) => d.labelX - d.labelW / 2)
+    .attr("y", (d) => d.labelY)
+    .attr("width", (d) => d.labelW)
+    .attr("height", (d) => d.labelH)
+    .attr("rx", 4)
+    .attr("ry", 4)
+    .attr("fill", "#f1f5f9")
+    .attr("stroke", "#cbd5e1")
+    .attr("stroke-width", 1);
+
+  labelG
     .append("text")
-    .attr("x", (d) => d.x + d.w / 2)
-    .attr("y", (d) => d.y + d.labelH / 2 + 1)
+    .attr("x", (d) => d.labelX)
+    .attr("y", (d) => d.labelY + d.labelH / 2 + 1)
     .attr("text-anchor", "middle")
     .attr("dominant-baseline", "middle")
     .attr("font-weight", 600)
+    .attr("font-size", 11)
     .attr("fill", "#475569")
+    .attr("text-decoration", "underline")
     .text((d) => d.label);
 
   // --- Edges --------------------------------------------------------------
@@ -1255,6 +1334,98 @@ export function drawInto(svg, model, L) {
     g.style("cursor", "pointer")
       .attr("onclick", "__emToggleFields(evt.target)");
   });
+
+  // --- Slice selection ----------------------------------------------------
+  // One slice visible at a time. 24 always-on dashed boxes over 48 nodes read
+  // as noise, and every producer/consumer seam makes two of them overlap by
+  // exactly one column, so the bands stay hidden until a slice is selected.
+  // The always-visible part is the label chip.
+  //
+  // Handlers are inline attributes, not addEventListener: Mermaid serializes
+  // the SVG before inserting it, which drops JS properties and listeners.
+  // Same reason `__emToggleFields` is installed on globalThis.
+  if (typeof globalThis.__emSelectSlice === "undefined") {
+    globalThis.__emSelectSlice = function (el, sliceId) {
+      const svgRoot = el.closest ? el.closest("svg") : el;
+      if (!svgRoot) return;
+      if (sliceId === "__toggle") {
+        const cur = svgRoot.getAttribute("data-pinned-slice") || "";
+        const want = el.closest("g.slice").getAttribute("data-slice-id");
+        sliceId = cur === want ? "" : want;
+        svgRoot.setAttribute("data-pinned-slice", sliceId);
+      }
+      const active = sliceId || svgRoot.getAttribute("data-pinned-slice") || "";
+      // The map lives in one attribute VALUE, not in per-node attribute names:
+      // Mermaid serializes the SVG and the HTML parser lowercases attribute
+      // names on re-parse, which would mangle ids like `addRoom`.
+      let map = svgRoot.__emSliceMap;
+      if (!map) {
+        try {
+          map = JSON.parse(svgRoot.getAttribute("data-slice-members") || "{}");
+        } catch { map = {}; }
+        svgRoot.__emSliceMap = map;
+      }
+      const memberOf = (id) =>
+        (id && (map[id] || map[id.split("__dup")[0]])) || [];
+      svgRoot.querySelectorAll("g.slice").forEach((g) => {
+        const on = active && g.getAttribute("data-slice-id") === active;
+        const bands = g.querySelector(".slice-bands");
+        if (bands) bands.setAttribute("opacity", on ? 1 : 0);
+        const chip = g.querySelector(".slice-label rect");
+        if (chip) {
+          chip.setAttribute("fill", on ? "#334155" : "#f1f5f9");
+          chip.setAttribute("stroke", on ? "#334155" : "#cbd5e1");
+        }
+        const txt = g.querySelector(".slice-label text");
+        if (txt) txt.setAttribute("fill", on ? "#ffffff" : "#475569");
+      });
+      svgRoot.querySelectorAll("g.node").forEach((g) => {
+        if (!active) { g.setAttribute("opacity", 1); return; }
+        g.setAttribute(
+          "opacity",
+          memberOf(g.getAttribute("data-node-id")).includes(active) ? 1 : 0.2
+        );
+      });
+      svgRoot.querySelectorAll("path.edge").forEach((e) => {
+        if (!active) { e.setAttribute("opacity", 1); return; }
+        const f = memberOf(e.getAttribute("data-from"));
+        const t = memberOf(e.getAttribute("data-to"));
+        e.setAttribute(
+          "opacity",
+          f.includes(active) && t.includes(active) ? 1 : 0.12
+        );
+      });
+    };
+  }
+
+  // Node → slices, stamped onto the SVG root so it survives serialization.
+  {
+    const nodeToSlices = new Map();
+    for (const [sliceId, ids] of L.sliceMembers || []) {
+      for (const id of ids) {
+        if (!nodeToSlices.has(id)) nodeToSlices.set(id, []);
+        nodeToSlices.get(id).push(sliceId);
+      }
+    }
+    svg.attr(
+      "data-slice-members",
+      JSON.stringify(Object.fromEntries(nodeToSlices))
+    );
+    svg.attr("data-pinned-slice", "");
+
+    sliceG
+      .select(".slice-label")
+      .attr("onmouseenter", (d) => `__emSelectSlice(this,'${d.sliceId}')`)
+      .attr("onmouseleave", "__emSelectSlice(this,'')");
+
+    nodeG
+      .filter((d) => nodeToSlices.has(d.el.id))
+      .attr(
+        "onmouseenter",
+        (d) => `__emSelectSlice(this,'${nodeToSlices.get(d.el.id)[0]}')`
+      )
+      .attr("onmouseleave", "__emSelectSlice(this,'')");
+  }
 }
 
 // For each node side (top, bottom, left, right), collect all edges that
