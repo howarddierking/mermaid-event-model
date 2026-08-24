@@ -1,6 +1,6 @@
-# Feed: Guest Left Hotel
+# Track New Room
 
-<!-- slice id: feed_guest_left -->
+<!-- slice id: track_new_room -->
 
 ## Model
 
@@ -10,19 +10,21 @@
 
 ```mermaid
 eventModel
-	readModel guestRoster["Guest Roster"] {
-		*email: string
-		guestName: string
-		roomNumber: int
-		checkedInAt: timestamp
-		isPresent: boolean
+	domainEvent roomAdded["Room Added"] {
+		*roomNumber: int
+		floor: int
+		roomType: string
+		capacity: int
 	}
-	domainEvent guestLeft["Guest Left Hotel"] {
-		email: string
-		departedAt: timestamp
+	readModel horizon["Availability Horizon"] {
+		*roomNumber: int
+		roomType: string
+		capacity: int
+		seededThrough: date
+		requiredThrough: date
 	}
-	slice feed_guest_left["Feed: Guest Left Hotel"]
-		guestLeft-->guestRoster
+	slice track_new_room["Track New Room"]
+		roomAdded-->horizon
 ```
 
 ## Description

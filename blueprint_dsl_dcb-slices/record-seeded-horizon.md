@@ -1,6 +1,6 @@
-# View Room Availability
+# Record Seeded Horizon
 
-<!-- slice id: view_room_availability -->
+<!-- slice id: record_seeded_horizon -->
 
 ## Model
 
@@ -10,23 +10,21 @@
 
 ```mermaid
 eventModel
-	actor Guest
-	readModel avail["Room Availability"] {
+	readModel horizon["Availability Horizon"] {
 		*roomNumber: int
-		*night: date
 		roomType: string
 		capacity: int
-		isAvailable: boolean
+		seededThrough: date
+		requiredThrough: date
 	}
-	ui:Guest booking_ui["Booking Screen"] {
-		roomNumber: int
-		roomType: string
-		capacity: int
-		checkIn: date
-		checkOut: date
+	domainEvent availabilityRolled["Availability Rolled"] {
+		*roomNumber: int
+		fromNight: date
+		throughNight: date
+		rolledAt: timestamp
 	}
-	slice view_room_availability["View Room Availability"]
-		avail-->booking_ui
+	slice record_seeded_horizon["Record Seeded Horizon"]
+		availabilityRolled-->horizon
 ```
 
 ## Description
@@ -46,5 +44,9 @@ sliceTests
 			# for state-view tests that only project a read model.
 		then
 			# Expected outcomes: emitted events, populated read
-			# models, signals to external systems.
+			# models, signals to external systems. For rejection
+			# scenarios use `error["<message>"]` — the message is
+			# read verbatim by code generation.
+	# Data-section fields may carry example values to demonstrate the
+	# case and seed code-gen fixtures, e.g. { checkIn: date = 2026-08-12 }.
 ```

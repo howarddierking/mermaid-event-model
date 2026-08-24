@@ -1,6 +1,6 @@
-# Feed: Payment Succeeded
+# Clear Payment
 
-<!-- slice id: feed_payment_succeeded -->
+<!-- slice id: clear_payment -->
 
 ## Model
 
@@ -25,7 +25,7 @@ eventModel
 		transactionRef: string
 		succeededAt: timestamp
 	}
-	slice feed_payment_succeeded["Feed: Payment Succeeded"]
+	slice clear_payment["Clear Payment"]
 		paymentSucceeded-->paymentsToProcess
 ```
 

@@ -1,6 +1,6 @@
-# View Room Availability
+# Mark Guest Departed
 
-<!-- slice id: view_room_availability -->
+<!-- slice id: mark_guest_departed -->
 
 ## Model
 
@@ -10,23 +10,19 @@
 
 ```mermaid
 eventModel
-	actor Guest
-	readModel avail["Room Availability"] {
-		*roomNumber: int
-		*night: date
-		roomType: string
-		capacity: int
-		isAvailable: boolean
-	}
-	ui:Guest booking_ui["Booking Screen"] {
+	readModel guestRoster["Guest Roster"] {
+		*email: string
+		guestName: string
 		roomNumber: int
-		roomType: string
-		capacity: int
-		checkIn: date
-		checkOut: date
+		checkedInAt: timestamp
+		isPresent: boolean
 	}
-	slice view_room_availability["View Room Availability"]
-		avail-->booking_ui
+	domainEvent guestLeft["Guest Left Hotel"] {
+		email: string
+		departedAt: timestamp
+	}
+	slice mark_guest_departed["Mark Guest Departed"]
+		guestLeft-->guestRoster
 ```
 
 ## Description
@@ -46,5 +42,9 @@ sliceTests
 			# for state-view tests that only project a read model.
 		then
 			# Expected outcomes: emitted events, populated read
-			# models, signals to external systems.
+			# models, signals to external systems. For rejection
+			# scenarios use `error["<message>"]` — the message is
+			# read verbatim by code generation.
+	# Data-section fields may carry example values to demonstrate the
+	# case and seed code-gen fixtures, e.g. { checkIn: date = 2026-08-12 }.
 ```

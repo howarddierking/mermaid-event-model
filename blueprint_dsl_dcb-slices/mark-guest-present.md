@@ -1,6 +1,6 @@
-# Feed: Payment Requested
+# Mark Guest Present
 
-<!-- slice id: feed_payment_requested -->
+<!-- slice id: mark_guest_present -->
 
 ## Model
 
@@ -10,24 +10,21 @@
 
 ```mermaid
 eventModel
-	domainEvent paymentRequested["Payment Requested"] {
-		*paymentId: UUID
+	domainEvent checkedIn["Checked In"] {
 		*bookingId: UUID
-		amount: decimal
-		currency: string
-		paymentMethod: string
-		requestedAt: timestamp
+		*email: string
+		roomNumber: int
+		checkedInAt: timestamp
 	}
-	readModel paymentsToProcess["Payments to Process"] {
-		*paymentId: UUID
-		bookingId: UUID
-		amount: decimal
-		currency: string
-		paymentMethod: string
-		status: string
+	readModel guestRoster["Guest Roster"] {
+		*email: string
+		guestName: string
+		roomNumber: int
+		checkedInAt: timestamp
+		isPresent: boolean
 	}
-	slice feed_payment_requested["Feed: Payment Requested"]
-		paymentRequested-->paymentsToProcess
+	slice mark_guest_present["Mark Guest Present"]
+		checkedIn-->guestRoster
 ```
 
 ## Description

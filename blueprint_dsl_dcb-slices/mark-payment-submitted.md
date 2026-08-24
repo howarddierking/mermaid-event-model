@@ -1,16 +1,15 @@
-# Payment Processor
+# Mark Payment Submitted
 
-<!-- slice id: payment_processor -->
+<!-- slice id: mark_payment_submitted -->
 
 ## Model
 
 <!-- Derived from the parent eventModel and refreshed on every spec-slices run. Do not hand-edit. -->
 
-**Pattern:** Automation
+**Pattern:** View
 
 ```mermaid
 eventModel
-	actor System
 	readModel paymentsToProcess["Payments to Process"] {
 		*paymentId: UUID
 		bookingId: UUID
@@ -19,24 +18,14 @@ eventModel
 		paymentMethod: string
 		status: string
 	}
-	automation:System paymentProcessor["Payment Processor"]
-	command submitPayment["Submit Payment"] {
-		paymentId: UUID
-		amount: decimal
-		currency: string
-		paymentMethod: string
-	}
-		reads [paymentRequested, paymentSubmitted] by paymentId
 	domainEvent paymentSubmitted["Payment Submitted"] {
 		*paymentId: UUID
 		bookingId: UUID
 		amount: decimal
 		submittedAt: timestamp
 	}
-	slice payment_processor["Payment Processor"]
-		paymentsToProcess-->paymentProcessor
-		paymentProcessor-->submitPayment
-		submitPayment-->paymentSubmitted
+	slice mark_payment_submitted["Mark Payment Submitted"]
+		paymentSubmitted-->paymentsToProcess
 ```
 
 ## Description
@@ -56,5 +45,9 @@ sliceTests
 			# for state-view tests that only project a read model.
 		then
 			# Expected outcomes: emitted events, populated read
-			# models, signals to external systems.
+			# models, signals to external systems. For rejection
+			# scenarios use `error["<message>"]` — the message is
+			# read verbatim by code generation.
+	# Data-section fields may carry example values to demonstrate the
+	# case and seed code-gen fixtures, e.g. { checkIn: date = 2026-08-12 }.
 ```

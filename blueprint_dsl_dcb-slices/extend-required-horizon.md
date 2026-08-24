@@ -1,6 +1,6 @@
-# Feed: Payment Submitted
+# Extend Required Horizon
 
-<!-- slice id: feed_payment_submitted -->
+<!-- slice id: extend_required_horizon -->
 
 ## Model
 
@@ -10,22 +10,18 @@
 
 ```mermaid
 eventModel
-	readModel paymentsToProcess["Payments to Process"] {
-		*paymentId: UUID
-		bookingId: UUID
-		amount: decimal
-		currency: string
-		paymentMethod: string
-		status: string
+	externalEvent weekElapsed["Week Elapsed"] {
+		occurredAt: date
 	}
-	domainEvent paymentSubmitted["Payment Submitted"] {
-		*paymentId: UUID
-		bookingId: UUID
-		amount: decimal
-		submittedAt: timestamp
+	readModel horizon["Availability Horizon"] {
+		*roomNumber: int
+		roomType: string
+		capacity: int
+		seededThrough: date
+		requiredThrough: date
 	}
-	slice feed_payment_submitted["Feed: Payment Submitted"]
-		paymentSubmitted-->paymentsToProcess
+	slice extend_required_horizon["Extend Required Horizon"]
+		weekElapsed-->horizon
 ```
 
 ## Description

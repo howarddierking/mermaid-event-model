@@ -14,6 +14,7 @@ eventModel
 	ui:Guest booking_ui["Booking Screen"] {
 		roomNumber: int
 		roomType: string
+		capacity: int
 		checkIn: date
 		checkOut: date
 	}

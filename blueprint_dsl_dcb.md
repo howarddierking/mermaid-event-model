@@ -8,6 +8,7 @@ The same hotel-booking model rewritten in Dynamic Consistency Boundary style: no
 eventModel
 	actor Manager
 	actor Guest
+	actor System
 
 	ui:Guest reg_ui["Registration UI"] {
 		name: string
@@ -50,21 +51,67 @@ eventModel
 	}
 	readModel avail["Room Availability"] {
 		*roomNumber: int
+		*night: date
 		roomType: string
+		capacity: int
 		isAvailable: boolean
-		nextCheckIn: date
 	}
 	slice add_room["Add Room"]
 		room_ui-->addRoom
 		addRoom-->roomAdded
 
+	externalEvent weekElapsed["Week Elapsed"] {
+		occurredAt: date
+	}
+	readModel horizon["Availability Horizon"] {
+		*roomNumber: int
+		roomType: string
+		capacity: int
+		seededThrough: date
+		requiredThrough: date
+	}
+	automation:System availabilityMaintainer["Availability Maintainer"]
+	command rollAvailability["Roll Availability"] {
+		roomNumber: int
+		roomType: string
+		capacity: int
+		fromNight: date
+		throughNight: date
+	}
+		reads [availabilityRolled] by roomNumber
+	domainEvent availabilityRolled["Availability Rolled"] {
+		*roomNumber: int
+		fromNight: date
+		throughNight: date
+		rolledAt: timestamp
+	}
+	slice track_new_room["Track New Room"]
+		roomAdded-->horizon
+
+	slice extend_required_horizon["Extend Required Horizon"]
+		weekElapsed-->horizon
+
+	slice record_seeded_horizon["Record Seeded Horizon"]
+		availabilityRolled-->horizon
+
+	slice roll_availability["Roll Availability"]
+		horizon-->availabilityMaintainer
+		availabilityMaintainer-->rollAvailability
+		rollAvailability-->availabilityRolled
+
+	slice seed_room_nights["Seed Room Nights"]
+		availabilityRolled-->avail
+
+	slice mark_nights_booked["Mark Nights Booked"]
+		booked-->avail
+
 	slice view_room_availability["View Room Availability"]
-		roomAdded-->avail
 		avail-->booking_ui
 
 	ui:Guest booking_ui["Booking Screen"] {
 		roomNumber: int
 		roomType: string
+		capacity: int
 		checkIn: date
 		checkOut: date
 	}
@@ -158,7 +205,7 @@ eventModel
 		positionUpdated-->hotelProximityTranslator
 		hotelProximityTranslator-->guestLeft
 
-	automation:Manager checkOutAutomation["Check-out Automation"]
+	automation:System checkOutAutomation["Check-out Automation"]
 	command checkOut["Checked Out"] {
 		bookingId: UUID
 	}
@@ -169,10 +216,10 @@ eventModel
 		*email: string
 		checkedOutAt: timestamp
 	}
-	slice feed_checked_in["Feed: Checked In"]
+	slice mark_guest_present["Mark Guest Present"]
 		checkedIn-->guestRoster
 
-	slice feed_guest_left["Feed: Guest Left Hotel"]
+	slice mark_guest_departed["Mark Guest Departed"]
 		guestLeft-->guestRoster
 
 	slice check_out_automation["Check-out Automation"]
@@ -213,7 +260,7 @@ eventModel
 		payment_ui-->pay
 		pay-->paymentRequested
 
-	automation:Guest paymentProcessor["Payment Processor"]
+	automation:System paymentProcessor["Payment Processor"]
 	command submitPayment["Submit Payment"] {
 		paymentId: UUID
 		amount: decimal
@@ -227,13 +274,13 @@ eventModel
 		amount: decimal
 		submittedAt: timestamp
 	}
-	slice feed_payment_requested["Feed: Payment Requested"]
+	slice queue_payment["Queue Payment"]
 		paymentRequested-->paymentsToProcess
 
-	slice feed_payment_submitted["Feed: Payment Submitted"]
+	slice mark_payment_submitted["Mark Payment Submitted"]
 		paymentSubmitted-->paymentsToProcess
 
-	slice feed_payment_succeeded["Feed: Payment Succeeded"]
+	slice clear_payment["Clear Payment"]
 		paymentSucceeded-->paymentsToProcess
 
 	slice payment_processor["Payment Processor"]

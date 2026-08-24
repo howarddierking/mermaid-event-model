@@ -1,6 +1,6 @@
-# Feed: Checked In
+# Mark Nights Booked
 
-<!-- slice id: feed_checked_in -->
+<!-- slice id: mark_nights_booked -->
 
 ## Model
 
@@ -10,21 +10,23 @@
 
 ```mermaid
 eventModel
-	domainEvent checkedIn["Checked In"] {
+	readModel avail["Room Availability"] {
+		*roomNumber: int
+		*night: date
+		roomType: string
+		capacity: int
+		isAvailable: boolean
+	}
+	domainEvent booked["Room Booked"] {
 		*bookingId: UUID
-		*email: string
-		roomNumber: int
-		checkedInAt: timestamp
+		*roomNumber: int
+		email: string
+		checkIn: date
+		checkOut: date
+		bookedAt: timestamp
 	}
-	readModel guestRoster["Guest Roster"] {
-		*email: string
-		guestName: string
-		roomNumber: int
-		checkedInAt: timestamp
-		isPresent: boolean
-	}
-	slice feed_checked_in["Feed: Checked In"]
-		checkedIn-->guestRoster
+	slice mark_nights_booked["Mark Nights Booked"]
+		booked-->avail
 ```
 
 ## Description

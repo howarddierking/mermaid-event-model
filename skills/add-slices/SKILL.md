@@ -88,7 +88,7 @@ This skill is **idempotent**. On every run:
 
 4. **For remaining read-side edges** (those not claimed by an Automation Pattern), build slices following Pattern 2 (View). Two read-side edges are connected when they share a `readModel` node. The unit of grouping is the connected component, with one practical exception:
 
-   - **Fan-in** (a read model with ≥2 incoming `event → readModel` edges): split into per-event slices. Emit one slice per `event → readModel` edge (named `feed_<event>`) plus one `view_<readModel>` slice containing the `readModel → consumer` edges. This applies **whether or not** the read model feeds an automation — an automation's input read model is split exactly like any other. Canonical Pattern 2 would bundle them; we split for the reason in "Slice granularity" below.
+   - **Fan-in** (a read model with ≥2 incoming `event → readModel` edges): split into per-event slices. Emit one slice per `event → readModel` edge plus one `view_<readModel>` slice containing the `readModel → consumer` edges. **Name each per-event slice for the capability it delivers, not for its mechanism** — see the naming rules below. This applies **whether or not** the read model feeds an automation — an automation's input read model is split exactly like any other. Canonical Pattern 2 would bundle them; we split for the reason in "Slice granularity" below.
    - All other view patterns (single event, or single consumer) become one slice each, named after the readModel or its consumer.
 
 5. **For remaining command-side edges** (those not claimed in step 3), group them into slices — two command-side edges are connected when they share a `command` node, and each connected component is one slice. Then **classify each by its trigger**, the kind of the node on the inbound edge into the command:
@@ -119,7 +119,14 @@ This skill is **idempotent**. On every run:
    - Abbreviated Translation slices (no automation node): name from the command, or from the inbound external event when that reads better — e.g. `gateway_confirmation["Gateway Confirmation"]` for `gatewayConfirmed → processPayment`, since the slice is about ingesting that event rather than about the command's own name.
    - Command slices: name from the command (e.g. `book_room["Book Room"]`).
    - View slices: name from the read model and/or consumer (e.g. `view_room_availability`, `update_guest_roster`).
-   - Fan-in per-event slices: `feed_<event>` or `update_<readModel>_<event>`.
+   - Fan-in per-event slices: name the **capability the projection delivers**, as a verb phrase —
+     `mark_nights_booked`, `queue_payment`, `seed_room_nights`, `extend_required_horizon`. This is
+     the one name in the output that cannot be derived mechanically: it takes a reading of what the
+     read model now knows that it did not know before. Do NOT fall back to a structural name like
+     `feed_<event>` or `<readModel>_from_<event>` — a slice named for its plumbing tells a reader
+     nothing the edge itself does not already say, and it reads as a different kind of thing from
+     every other slice in the model. If the capability is genuinely unclear, emit the slice with a
+     structural placeholder name and **flag it for the user to name**, rather than shipping jargon.
    - Fan-in view slice: `view_<readModel>`.
    - Use snake_case for ids and a human-readable string in the label.
 
@@ -164,10 +171,10 @@ To classify it, resolve the feeding events of `paymentsToProcess` across the who
 `paymentsToProcess` has two incoming `event → readModel` edges, so step 4's fan-in rule gives each its own View slice:
 
 ```
-slice feed_payment_requested["Feed: Payment Requested"]
+slice queue_payment["Queue Payment"]
     paymentRequested-->paymentsToProcess
 
-slice feed_payment_succeeded["Feed: Payment Succeeded"]
+slice clear_payment["Clear Payment"]
     paymentSucceeded-->paymentsToProcess
 ```
 
