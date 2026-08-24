@@ -291,6 +291,16 @@ function attachCodegenPanel(container, src, sliceName) {
   awsBtn.className = 'primary';
   awsBtn.textContent = isModelView ? 'Generate AWS shared runtime' : 'Generate AWS (CDK/TS)';
 
+  // On the model view, a third target: the shared CDK infrastructure as a
+  // live, compilable infra/stacks/regional-stack.ts (VPC, DynamoDB ref,
+  // Kinesis, ElastiCache Redis, Lambdas, API Gateway). Not shown on slices.
+  const infraBtn = isModelView ? document.createElement('button') : null;
+  if (infraBtn) {
+    infraBtn.type = 'button';
+    infraBtn.className = 'primary';
+    infraBtn.textContent = 'Generate AWS infra (CDK)';
+  }
+
   const copyBtn = document.createElement('button');
   copyBtn.type = 'button';
   copyBtn.textContent = 'Copy';
@@ -306,12 +316,14 @@ function attachCodegenPanel(container, src, sliceName) {
   manifestBtn.textContent = 'Download manifest.json';
   manifestBtn.disabled = true;
 
-  bar.append(genBtn, awsBtn, copyBtn, dlBtn, manifestBtn);
+  bar.append(genBtn, awsBtn);
+  if (infraBtn) bar.append(infraBtn);
+  bar.append(copyBtn, dlBtn, manifestBtn);
 
   const output = document.createElement('pre');
   output.className = 'codegen-output empty';
   output.textContent = isModelView
-    ? 'Generate scaffolding from this model. “Generate AWS shared runtime” emits the COMMON part once — the event-store envelope, the merged EventTypes map, the DynamoDB/Kinesis/Redis runtime, and the shared CDK infra — which each slice imports. Open a slice to generate just its part.'
+    ? 'Generate scaffolding from this model. “Generate AWS shared runtime” emits the COMMON runtime once (src/shared/event-store.ts) — the event-store envelope, the merged EventTypes map, and the DynamoDB/Kinesis/Redis helpers. “Generate AWS infra (CDK)” emits the shared stack (infra/stacks/regional-stack.ts) — VPC, DynamoDB, Kinesis, Redis, Lambdas, API Gateway. Open a slice to generate just its part.'
     : 'Generate Axon Framework 5 (Java) or AWS-native (CDK + Lambda, TypeScript) scaffolding from this slice — commands, events, a command handler (or projection/projector), and validation derived from the slice tests. The AWS output imports the model’s shared runtime instead of re-emitting it.';
 
   panel.append(bar, output);
@@ -321,20 +333,24 @@ function attachCodegenPanel(container, src, sliceName) {
   // The extension of the currently shown output ('java' or 'ts'), so Copy /
   // Download reflect whichever target was generated last.
   let generatedExt = 'java';
+  // An explicit download filename for the current output (overrides fileBase).
+  let downloadName = null;
   // File base is conventionally PascalCase; derive one from the slice name.
   const fileBase = ((sliceName || 'slice').replace(/[^a-z0-9]+/gi, ' ').trim().split(/\s+/)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('')) || 'Slice';
 
-  // The two generators are independent: clicking one replaces the shown output.
-  // `label` is the button's resting text; `ext` picks the download extension.
-  const runGenerator = (btn, label, gen, ext) => {
-    const original = btn.textContent;
-    genBtn.disabled = true;
-    awsBtn.disabled = true;
+  const genButtons = [genBtn, awsBtn, ...(infraBtn ? [infraBtn] : [])];
+
+  // The generators are independent: clicking one replaces the shown output.
+  // `label` is the button's resting text; `produce()` returns the source;
+  // `ext` picks the download extension; `name` optionally fixes the filename.
+  const runGenerator = (btn, label, produce, ext, name) => {
+    genButtons.forEach((b) => (b.disabled = true));
     btn.textContent = 'Generating…';
     try {
-      generated = gen(src, { sliceName });
+      generated = produce();
       generatedExt = ext;
+      downloadName = name || null;
       output.textContent = generated;
       output.classList.remove('empty');
       copyBtn.disabled = false;
@@ -346,16 +362,24 @@ function attachCodegenPanel(container, src, sliceName) {
       output.textContent = 'Code generation failed:\n' + (err && err.stack ? err.stack : String(err));
       output.classList.remove('empty');
     } finally {
-      genBtn.disabled = false;
-      awsBtn.disabled = false;
+      genButtons.forEach((b) => (b.disabled = false));
       btn.textContent = label;
     }
   };
 
   genBtn.addEventListener('click', () =>
-    runGenerator(genBtn, 'Regenerate Axon (Java)', generateFromSource, 'java'));
+    runGenerator(genBtn, 'Regenerate Axon (Java)',
+      () => generateFromSource(src, { sliceName }), 'java'));
   awsBtn.addEventListener('click', () =>
-    runGenerator(awsBtn, 'Regenerate AWS (CDK/TS)', generateAwsFromSource, 'ts'));
+    runGenerator(awsBtn, isModelView ? 'Regenerate AWS shared runtime' : 'Regenerate AWS (CDK/TS)',
+      () => generateAwsFromSource(src, { sliceName }), 'ts',
+      isModelView ? 'event-store.ts' : null));
+  if (infraBtn) {
+    infraBtn.addEventListener('click', () =>
+      runGenerator(infraBtn, 'Regenerate AWS infra (CDK)',
+        () => generateAwsFromSource(src, { sliceName, part: 'infra' }), 'ts',
+        'regional-stack.ts'));
+  }
 
   copyBtn.addEventListener('click', async () => {
     if (generated == null) return;
@@ -385,11 +409,9 @@ function attachCodegenPanel(container, src, sliceName) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    // The AWS shared runtime (model view) is conventionally event-store.ts;
-    // everything else uses the PascalCase slice base.
-    a.download = (generatedExt === 'ts' && isModelView)
-      ? 'event-store.ts'
-      : fileBase + '.' + generatedExt;
+    // Use the generator's fixed filename (event-store.ts / regional-stack.ts)
+    // when set; otherwise the PascalCase slice base + extension.
+    a.download = downloadName || (fileBase + '.' + generatedExt);
     document.body.appendChild(a);
     a.click();
     a.remove();
