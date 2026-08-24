@@ -1677,92 +1677,26 @@ function genAwsProjection(out, parts, model) {
   return true;
 }
 
-// CDK constructs (regional-stack.ts style) for this slice: the event-table
-// reference, the NodejsFunction(s) wired with env + grants, and the API
-// Gateway route (command slice) or the DynamoDB Streams event source +
-// query route (view slice).
+// A short pointer to where this slice's CDK wiring actually lives. The live,
+// compilable stack — the Lambdas, grants, API routes, and the DynamoDB
+// Streams event source — is emitted once by the model-level 'infra' target
+// (infra/stacks/regional-stack.ts), which is the single source of truth. We
+// deliberately do NOT re-emit a per-slice CDK fragment here: it would be inert
+// (a handler module has no stack scope), would duplicate the infra, and its
+// per-slice topology (one Lambda + route per slice) no longer matches the
+// generated stack (a single command/query/projector handler).
 function genAwsCdk(out, parts, sliceName) {
   const isCommand = parts.command.length > 0;
   const isView = !isCommand && parts.readModel.length > 0;
   if (!isCommand && !isView) return;
 
-  const base = pascal((sliceName || "slice").replace(/\.md$/, ""));
-  out.line("// ═══════════════════════════════════════════════════════════════════");
-  out.line("// CDK wiring (regional-stack.ts style). Drop these constructs into the");
-  out.line("// RegionalStack constructor; they reference shared infra (event table,");
-  out.line("// stream, VPC, Redis) already declared there.");
-  out.line("// ═══════════════════════════════════════════════════════════════════");
-  out.line("//");
-  out.line("// import * as cdk from 'aws-cdk-lib';");
-  out.line("// import * as lambda from 'aws-cdk-lib/aws-lambda';");
-  out.line("// import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';");
-  out.line("// import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';");
-  out.line("// import * as apigateway from 'aws-cdk-lib/aws-apigateway';");
-  out.line("// import * as eventsources from 'aws-cdk-lib/aws-lambda-event-sources';");
-  out.line("// import * as path from 'path';");
-  out.line("//");
-
-  if (isCommand) {
-    out.line(`// const ${camel(base)}Command = new nodejs.NodejsFunction(this, '${base}Command', {`);
-    out.line("//   runtime: lambda.Runtime.NODEJS_20_X,");
-    out.line("//   architecture: lambda.Architecture.ARM_64,");
-    out.line(`//   entry: path.join(__dirname, '../../src/${camel(base)}/handler.ts'),`);
-    out.line("//   handler: 'handler',");
-    out.line("//   timeout: cdk.Duration.seconds(10),");
-    out.line("//   environment: {");
-    out.line("//     EVENT_TABLE_NAME: 'LoanEvents',");
-    out.line("//     KINESIS_STREAM_NAME: stream.streamName,");
-    out.line("//   },");
-    out.line("// });");
-    out.line(`// // Grants: read+write the event store, publish to Kinesis.`);
-    out.line(`// props.globalTable.grantReadWriteData(${camel(base)}Command);`);
-    out.line(`// stream.grantWrite(${camel(base)}Command);`);
-    out.line("//");
-    out.line(`// // API Gateway route → the command handler.`);
-    out.line(`// const ${camel(base)}Integration = new apigateway.LambdaIntegration(${camel(base)}Command);`);
-    for (const cmd of parts.command) {
-      const axis = axesOf(cmd)[0];
-      if ((cmd.reads || []).length === 0) {
-        out.line(`// api.root.addResource('api').addResource('${camel(pascal(cmd.id))}s').addMethod('POST', ${camel(base)}Integration);`);
-      } else {
-        out.line(`// // POST /api/${camel(pascal(cmd.id))}s/{id} (routing axis: ${axis || "id"})`);
-        out.line(`// loanByIdResource.addResource('${camel(pascal(cmd.id))}').addMethod('POST', ${camel(base)}Integration);`);
-      }
-    }
-  } else {
-    // View slice: projector wired to DynamoDB Streams + query route.
-    out.line(`// const ${camel(base)}Projector = new nodejs.NodejsFunction(this, '${base}Projector', {`);
-    out.line("//   runtime: lambda.Runtime.NODEJS_20_X,");
-    out.line("//   architecture: lambda.Architecture.ARM_64,");
-    out.line(`//   entry: path.join(__dirname, '../../src/${camel(base)}/projector.ts'),`);
-    out.line("//   handler: 'handler',");
-    out.line("//   timeout: cdk.Duration.seconds(30),");
-    out.line("//   vpc, vpcSubnets: { subnets: vpc.privateSubnets }, securityGroups: [lambdaSg],");
-    out.line("//   environment: { REDIS_HOST: redisEndpoint, REDIS_PORT: redisPort, REDIS_TLS: 'true' },");
-    out.line("// });");
-    out.line(`// // DynamoDB Streams → projector (rebuilds the read model from events).`);
-    out.line(`// props.globalTable.grantStreamRead(${camel(base)}Projector);`);
-    out.line(`// ${camel(base)}Projector.addEventSource(new eventsources.DynamoEventSource(props.globalTable, {`);
-    out.line("//   startingPosition: lambda.StartingPosition.TRIM_HORIZON,");
-    out.line("//   batchSize: 25, retryAttempts: 5, bisectBatchOnError: true,");
-    out.line("// }));");
-    out.line("//");
-    out.line(`// const ${camel(base)}Query = new nodejs.NodejsFunction(this, '${base}Query', {`);
-    out.line("//   runtime: lambda.Runtime.NODEJS_20_X,");
-    out.line("//   architecture: lambda.Architecture.ARM_64,");
-    out.line(`//   entry: path.join(__dirname, '../../src/${camel(base)}/handler.ts'),`);
-    out.line("//   handler: 'queryHandler',");
-    out.line("//   timeout: cdk.Duration.seconds(5),");
-    out.line("//   vpc, vpcSubnets: { subnets: vpc.privateSubnets }, securityGroups: [lambdaSg],");
-    out.line("//   environment: { REDIS_HOST: redisEndpoint, REDIS_PORT: redisPort, REDIS_TLS: 'true' },");
-    out.line("// });");
-    const rm = parts.readModel[0];
-    out.line(`// // GET /api/${camel(rm.id)}/{id} → the query handler (reads Redis only).`);
-    out.line(`// const ${camel(base)}Integration = new apigateway.LambdaIntegration(${camel(base)}Query);`);
-    out.line(`// const ${camel(rm.id)}Resource = api.root.addResource('api').addResource('${camel(rm.id)}');`);
-    out.line(`// ${camel(rm.id)}Resource.addMethod('GET', ${camel(base)}Integration);`);
-    out.line(`// ${camel(rm.id)}Resource.addResource('{id}').addMethod('GET', ${camel(base)}Integration);`);
-  }
+  out.line("// ── CDK wiring ──────────────────────────────────────────────────────");
+  out.line("// This handler is wired into infrastructure by the model-level 'infra'");
+  out.line("// target — generate infra/stacks/regional-stack.ts (the \"Generate AWS");
+  out.line("// infra (CDK)\" action on the model view). That stack declares the Lambda,");
+  out.line("// its env + grants, the API Gateway route, and (for read models) the");
+  out.line("// DynamoDB Streams event source — the single source of truth for");
+  out.line("// deployment. Nothing to paste here.");
   out.blank();
 }
 
@@ -1968,18 +1902,26 @@ function genAwsSharedInfra(out, allEvents) {
 // (NodejsFunction) wired with env + grants, an API Gateway (prod stage), and
 // the DynamoDB Streams → projector event source. Per-slice handlers plug into
 // the src/<slice>/handler.ts entry points this stack references.
-function genAwsRegionalStack(out, model, parts, modelName) {
+function genAwsRegionalStack(out, model, parts, modelName, tier) {
   const hasCommand = parts.command.length > 0 || model.elements.some((e) => e.kind === "command");
   const hasReadModel = parts.readModel.length > 0 || model.elements.some((e) => e.kind === "readModel");
+  const minimal = tier === "minimal";
 
   out.line("// ─────────────────────────────────────────────────────────────");
   out.line(`// Shared infrastructure for model: ${modelName}`);
   out.line("// Target: AWS-native CDK — infra/stacks/regional-stack.ts");
-  out.line("// The COMMON stack, emitted once from the whole model: Multi-AZ VPC,");
-  out.line("// the DynamoDB global-table reference, a regional Kinesis stream, a");
-  out.line("// Multi-AZ ElastiCache Redis replication group, the command/query/");
-  out.line("// projector Lambdas, and the API Gateway. Deployed identically per region");
-  out.line("// for active-active. Source of truth is the model .md — regenerate.");
+  if (minimal) {
+    out.line("// Cost tier: MINIMAL — a low-cost footprint for demos/PoCs: one NAT");
+    out.line("// gateway and a single-node ElastiCache Redis (cache.t4g.micro, no");
+    out.line("// replicas, no Multi-AZ failover). NOT for production.");
+  } else {
+    out.line("// Cost tier: PRODUCTION — 3 NAT gateways and a Multi-AZ ElastiCache");
+    out.line("// Redis replication group (cache.r7g.large, 1 primary + 2 replicas).");
+  }
+  out.line("// The COMMON stack, emitted once from the whole model: VPC, the DynamoDB");
+  out.line("// global-table reference, a regional Kinesis stream, ElastiCache Redis,");
+  out.line("// the command/query/projector Lambdas, and the API Gateway. Deployed");
+  out.line("// identically per region. Source of truth is the model .md — regenerate.");
   out.line("// ─────────────────────────────────────────────────────────────");
   out.line("import * as cdk from 'aws-cdk-lib';");
   out.line("import * as ec2 from 'aws-cdk-lib/aws-ec2';");
@@ -2018,7 +1960,7 @@ function genAwsRegionalStack(out, model, parts, modelName) {
   out.line("const vpc = new ec2.Vpc(this, 'Vpc', {");
   out.push();
   out.line("maxAzs: 3,");
-  out.line("natGateways: 3,");
+  out.line(minimal ? "natGateways: 1," : "natGateways: 3,");
   out.line("subnetConfiguration: [");
   out.push();
   out.line("{ cidrMask: 24, name: 'Public', subnetType: ec2.SubnetType.PUBLIC },");
@@ -2066,11 +2008,11 @@ function genAwsRegionalStack(out, model, parts, modelName) {
   out.line("replicationGroupDescription: `Loan read model - ${props.regionLabel}`,");
   out.line("engine: 'redis',");
   out.line("engineVersion: '7.1',");
-  out.line("cacheNodeType: 'cache.r7g.large',");
+  out.line(minimal ? "cacheNodeType: 'cache.t4g.micro'," : "cacheNodeType: 'cache.r7g.large',");
   out.line("numNodeGroups: 1,");
-  out.line("replicasPerNodeGroup: 2,");
-  out.line("automaticFailoverEnabled: true,");
-  out.line("multiAzEnabled: true,");
+  out.line(minimal ? "replicasPerNodeGroup: 0," : "replicasPerNodeGroup: 2,");
+  out.line(minimal ? "automaticFailoverEnabled: false," : "automaticFailoverEnabled: true,");
+  out.line(minimal ? "multiAzEnabled: false," : "multiAzEnabled: true,");
   out.line("cacheSubnetGroupName: subnetGroup.cacheSubnetGroupName,");
   out.line("securityGroupIds: [redisSg.securityGroupId],");
   out.line("atRestEncryptionEnabled: true,");
@@ -2217,11 +2159,12 @@ function genAwsRegionalStack(out, model, parts, modelName) {
 // ─────────────────────────────────────────────────────────────────────────
 
 // Generate the model-level shared CDK infra (regional-stack.ts) as live code.
-function generateAwsInfra({ model, sliceName }) {
+// tier: 'production' (default) or 'minimal' (low-cost demo footprint).
+function generateAwsInfra({ model, sliceName, tier = "production" }) {
   const out = new Emitter();
   const parts = partition(model);
   const name = sliceName || "model";
-  genAwsRegionalStack(out, model, parts, name);
+  genAwsRegionalStack(out, model, parts, name, tier);
   return out.toString();
 }
 
@@ -2285,14 +2228,15 @@ function generateAwsShared({ model, sliceName }) {
  * @param {string} [args.sliceName]  human name for the header comment
  * @param {Array}  [args.decidedExclusions]
  * @param {('runtime'|'infra'|'slice')} [args.part='slice']
+ * @param {('production'|'minimal')} [args.tier='production']  infra cost tier
  * @returns {string} TypeScript source
  */
-export function generateAwsNative({ model, tests, sliceName, decidedExclusions = [], part = "slice" }) {
+export function generateAwsNative({ model, tests, sliceName, decidedExclusions = [], part = "slice", tier = "production" }) {
   if (part === "runtime") {
     return generateAwsShared({ model, sliceName });
   }
   if (part === "infra") {
-    return generateAwsInfra({ model, sliceName });
+    return generateAwsInfra({ model, sliceName, tier });
   }
 
   const out = new Emitter();
@@ -2330,7 +2274,8 @@ export function generateAwsNative({ model, tests, sliceName, decidedExclusions =
  * @param {string} src  slice spec markdown or raw DSL
  * @param {object} [opts]
  * @param {string} [opts.sliceName]
- * @param {('runtime'|'slice')} [opts.part]  force a part; otherwise inferred
+ * @param {('runtime'|'infra'|'slice')} [opts.part]  force a part; otherwise inferred
+ * @param {('production'|'minimal')} [opts.tier]  infra cost tier (part='infra')
  * @returns {string} TypeScript source
  */
 export function generateAwsFromSource(src, opts = {}) {
@@ -2346,5 +2291,6 @@ export function generateAwsFromSource(src, opts = {}) {
     sliceName: opts.sliceName,
     decidedExclusions,
     part,
+    tier: opts.tier || "production",
   });
 }
