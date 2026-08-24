@@ -169,7 +169,7 @@
 import mermaid from 'mermaid';
 import { marked } from 'marked';
 import diagramDefinitions from './index.js';
-import { generateFromSource, generateManifestFromSource } from './codegen.js';
+import { generateFromSource, generateAwsFromSource, generateManifestFromSource } from './codegen.js';
 
 await mermaid.registerExternalDiagrams(diagramDefinitions);
 mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
@@ -280,6 +280,12 @@ function attachCodegenPanel(container, src, sliceName) {
   genBtn.className = 'primary';
   genBtn.textContent = 'Generate Axon (Java)';
 
+  // A second primary target: the AWS-native binding (CDK + Lambda, TypeScript).
+  const awsBtn = document.createElement('button');
+  awsBtn.type = 'button';
+  awsBtn.className = 'primary';
+  awsBtn.textContent = 'Generate AWS (CDK/TS)';
+
   const copyBtn = document.createElement('button');
   copyBtn.type = 'button';
   copyBtn.textContent = 'Copy';
@@ -287,7 +293,7 @@ function attachCodegenPanel(container, src, sliceName) {
 
   const dlBtn = document.createElement('button');
   dlBtn.type = 'button';
-  dlBtn.textContent = 'Download .java';
+  dlBtn.textContent = 'Download';
   dlBtn.disabled = true;
 
   const manifestBtn = document.createElement('button');
@@ -295,43 +301,54 @@ function attachCodegenPanel(container, src, sliceName) {
   manifestBtn.textContent = 'Download manifest.json';
   manifestBtn.disabled = true;
 
-  bar.append(genBtn, copyBtn, dlBtn, manifestBtn);
+  bar.append(genBtn, awsBtn, copyBtn, dlBtn, manifestBtn);
 
   const output = document.createElement('pre');
   output.className = 'codegen-output empty';
-  output.textContent = 'Click “Generate Axon (Java)” to scaffold Axon Framework 5 commands, events, a DCB command handler (or projection), domain exceptions, and AxonTestFixture tests from this slice.';
+  output.textContent = 'Generate Axon Framework 5 (Java) or AWS-native (CDK + Lambda, TypeScript) scaffolding from this slice — commands, events, a command handler (or projection/projector), and validation derived from the slice tests.';
 
   panel.append(bar, output);
   container.insertBefore(panel, container.firstChild);
 
   let generated = null;
-  // Java files are conventionally PascalCase; derive one from the slice name.
+  // The extension of the currently shown output ('java' or 'ts'), so Copy /
+  // Download reflect whichever target was generated last.
+  let generatedExt = 'java';
+  // File base is conventionally PascalCase; derive one from the slice name.
   const fileBase = ((sliceName || 'slice').replace(/[^a-z0-9]+/gi, ' ').trim().split(/\s+/)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('')) || 'Slice';
 
-  const generate = () => {
-    const original = genBtn.textContent;
+  // The two generators are independent: clicking one replaces the shown output.
+  // `label` is the button's resting text; `ext` picks the download extension.
+  const runGenerator = (btn, label, gen, ext) => {
+    const original = btn.textContent;
     genBtn.disabled = true;
-    genBtn.textContent = 'Generating…';
+    awsBtn.disabled = true;
+    btn.textContent = 'Generating…';
     try {
-      generated = generateFromSource(src, { sliceName });
+      generated = gen(src, { sliceName });
+      generatedExt = ext;
       output.textContent = generated;
       output.classList.remove('empty');
       copyBtn.disabled = false;
       dlBtn.disabled = false;
       manifestBtn.disabled = false;
-      genBtn.textContent = 'Regenerate';
+      dlBtn.textContent = 'Download .' + ext;
     } catch (err) {
       console.error('codegen failed', err);
       output.textContent = 'Code generation failed:\n' + (err && err.stack ? err.stack : String(err));
       output.classList.remove('empty');
-      genBtn.textContent = original;
     } finally {
       genBtn.disabled = false;
+      awsBtn.disabled = false;
+      btn.textContent = label;
     }
   };
 
-  genBtn.addEventListener('click', generate);
+  genBtn.addEventListener('click', () =>
+    runGenerator(genBtn, 'Regenerate Axon (Java)', generateFromSource, 'java'));
+  awsBtn.addEventListener('click', () =>
+    runGenerator(awsBtn, 'Regenerate AWS (CDK/TS)', generateAwsFromSource, 'ts'));
 
   copyBtn.addEventListener('click', async () => {
     if (generated == null) return;
@@ -354,11 +371,14 @@ function attachCodegenPanel(container, src, sliceName) {
 
   dlBtn.addEventListener('click', () => {
     if (generated == null) return;
-    const blob = new Blob([generated], { type: 'text/x-java-source;charset=utf-8' });
+    const mime = generatedExt === 'ts'
+      ? 'application/typescript;charset=utf-8'
+      : 'text/x-java-source;charset=utf-8';
+    const blob = new Blob([generated], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = fileBase + '.java';
+    a.download = fileBase + '.' + generatedExt;
     document.body.appendChild(a);
     a.click();
     a.remove();

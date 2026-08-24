@@ -48,15 +48,17 @@ stage_site() {
   cp "$ROOT_DIR"/settings.png "$SITE_DIR/"
 
   # Example model overviews
-  cp "$ROOT_DIR"/blueprint_dsl.md "$ROOT_DIR"/blueprint_dsl_dcb.md "$ROOT_DIR"/blueprint_dsl_fanin.md "$SITE_DIR/"
+  cp "$ROOT_DIR"/blueprint_dsl.md "$ROOT_DIR"/blueprint_dsl_dcb.md "$ROOT_DIR"/blueprint_dsl_fanin.md \
+     "$ROOT_DIR"/loan-originations.md "$SITE_DIR/"
 
   # Per-slice spec directories
-  cp -R "$ROOT_DIR"/blueprint_dsl_dcb-slices "$ROOT_DIR"/blueprint_dsl_fanin-slices "$SITE_DIR/"
+  cp -R "$ROOT_DIR"/blueprint_dsl_dcb-slices "$ROOT_DIR"/blueprint_dsl_fanin-slices \
+        "$ROOT_DIR"/loan-originations-slices "$SITE_DIR/"
 
   # Generate slice manifests (GitHub Pages + S3 have no directory listing)
   node -e "
     const fs = require('fs');
-    for (const d of ['blueprint_dsl_dcb-slices', 'blueprint_dsl_fanin-slices']) {
+    for (const d of ['blueprint_dsl_dcb-slices', 'blueprint_dsl_fanin-slices', 'loan-originations-slices']) {
       const p = '$SITE_DIR/' + d;
       const files = fs.readdirSync(p).filter(f => f.endsWith('.md')).sort();
       fs.writeFileSync(p + '/index.json', JSON.stringify(files));
