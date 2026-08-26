@@ -81,17 +81,15 @@ eventModel
 		reads [availabilityRolled] by roomNumber
 	domainEvent availabilityRolled["Availability Rolled"] {
 		*roomNumber: int
+		roomType: string
+		capacity: int
 		fromNight: date
 		throughNight: date
 		rolledAt: timestamp
 	}
-	slice track_new_room["Track New Room"]
+	slice track_availability_horizon["Track Availability Horizon"]
 		roomAdded-->horizon
-
-	slice extend_required_horizon["Extend Required Horizon"]
 		weekElapsed-->horizon
-
-	slice record_seeded_horizon["Record Seeded Horizon"]
 		availabilityRolled-->horizon
 
 	slice roll_availability["Roll Availability"]
@@ -99,13 +97,9 @@ eventModel
 		availabilityMaintainer-->rollAvailability
 		rollAvailability-->availabilityRolled
 
-	slice seed_room_nights["Seed Room Nights"]
-		availabilityRolled-->avail
-
-	slice mark_nights_booked["Mark Nights Booked"]
-		booked-->avail
-
 	slice view_room_availability["View Room Availability"]
+		availabilityRolled-->avail
+		booked-->avail
 		avail-->booking_ui
 
 	ui:Guest booking_ui["Booking Screen"] {
@@ -216,10 +210,8 @@ eventModel
 		*email: string
 		checkedOutAt: timestamp
 	}
-	slice mark_guest_present["Mark Guest Present"]
+	slice track_guest_presence["Track Guest Presence"]
 		checkedIn-->guestRoster
-
-	slice mark_guest_departed["Mark Guest Departed"]
 		guestLeft-->guestRoster
 
 	slice check_out_automation["Check-out Automation"]
@@ -274,13 +266,9 @@ eventModel
 		amount: decimal
 		submittedAt: timestamp
 	}
-	slice queue_payment["Queue Payment"]
+	slice track_outstanding_payments["Track Outstanding Payments"]
 		paymentRequested-->paymentsToProcess
-
-	slice mark_payment_submitted["Mark Payment Submitted"]
 		paymentSubmitted-->paymentsToProcess
-
-	slice clear_payment["Clear Payment"]
 		paymentSucceeded-->paymentsToProcess
 
 	slice payment_processor["Payment Processor"]

@@ -68,10 +68,19 @@ Canonical flow pattern: `ui → command → domainEvent → readModel → (ui | 
 ## DSL kinds (sliceTests)
 
 Each test is one Given / When / Then card. Items inside reuse the
-`eventModel` visual vocabulary plus one sliceTests-only kind:
+`eventModel` visual vocabulary plus two sliceTests-only kinds:
 
 - `domainEvent`, `externalEvent`, `command`, `readModel`, `automation`,
   `ui` — same colors and shapes as `eventModel`.
+- `none ["<message>"]` — **sliceTests only.** An expected **empty result**: the
+  query the slice describes matched nothing. Not a rejection — nothing failed,
+  there is just nothing to show — so it is a distinct kind from `error` and
+  renders neutral grey, dashed (`#f1f5f9` fill / `#94a3b8` stroke). It exists
+  for View slices, whose most interesting case is usually the empty one: a
+  room-availability search past the seeded horizon must return no rooms, and
+  the naive query ("no unavailable row exists") returns every room instead.
+  In a View test the `when` block holds a `ui` carrying the search criteria as
+  example values, not a command — there is no command under test.
 - `error [<code>]["<message>"]` — **sliceTests only.** An expected rejection
   outcome inside a `then` block. Renders as a red box (`#f87171` fill /
   `#7f1d1d` stroke, matching the 400/900 palette pattern). When the slice is
@@ -87,11 +96,12 @@ an optional example value, `field: type = value` (e.g. `checkIn: date =
 2026-08-12`). It renders value-forward — `field = value` when an example is
 present, `field: type` otherwise — makes each test case concrete, and feeds
 code generation as a fixture. The value is the raw text after `=`; it's
-optional, so type-only fields still parse. `error[...]` is the only construct
-truly exclusive to sliceTests; example values are a superset of the shared
-data-section syntax.
+optional, so type-only fields still parse. `error[...]` and `none[...]` are the
+only constructs truly exclusive to sliceTests; example values are a superset of
+the shared data-section syntax.
 
-`then` may contain a mix of emitted events, read-model states, and errors.
+`then` may contain a mix of emitted events, read-model states, errors, and — for
+a View slice's query — a `none[...]` empty result.
 
 ## Conventions
 
@@ -121,15 +131,23 @@ data-section syntax.
   template lives at `skills/spec-slices/template.md`; editing the template
   affects newly-stamped files only — existing user content is never
   retroactively rewritten.
+- A **View slice is one read model plus every event that feeds it**, plus its
+  `readModel → ui` consumers — never one slice per incoming event. A projection
+  is a fold over all its inputs, so a per-event slice cannot state its own
+  behaviour without Givens from sibling slices it declares no relation to. The
+  slice is the unit of **specification**; the generated handler is the unit of
+  **regeneration**, and one View slice may emit many independently-regenerable
+  handlers. `readModel → automation` stays with the Automation slice.
 - `add-slices` rewrites the slice declarations in an `eventModel` block;
   it strips existing slices first to stay idempotent. It ignores `reads`.
   It also **classifies** each slice against the four canonical patterns —
   Command, View, Automation, Translation — with `externalEvent` as the sole
   discriminator between the last two, since they are structurally identical.
   Slice boundaries are chosen by blast radius: **a slice is the smallest set
-  of edges that must change together**, because the slice is the unit of
-  incremental regeneration. That's why events feeding an automation's view
-  are separate View slices from the automation that reads it.
+  of edges that must change together**. That's why the events feeding an
+  automation's view are a separate View slice from the automation that reads
+  it — but the split stops there, per the View rule above: all of a read
+  model's feeding events stay in one slice.
 - The pattern is a **derived fact**: never written into the DSL (an author
   could assert something the edges contradict), recorded instead in each
   slice spec's `## Model` section by `spec-slices`, which overwrites it on

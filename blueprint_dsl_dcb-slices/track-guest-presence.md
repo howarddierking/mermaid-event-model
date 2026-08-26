@@ -1,6 +1,6 @@
-# Mark Nights Booked
+# Track Guest Presence
 
-<!-- slice id: mark_nights_booked -->
+<!-- slice id: track_guest_presence -->
 
 ## Model
 
@@ -10,23 +10,26 @@
 
 ```mermaid
 eventModel
-	readModel avail["Room Availability"] {
-		*roomNumber: int
-		*night: date
-		roomType: string
-		capacity: int
-		isAvailable: boolean
-	}
-	domainEvent booked["Room Booked"] {
+	domainEvent checkedIn["Checked In"] {
 		*bookingId: UUID
-		*roomNumber: int
-		email: string
-		checkIn: date
-		checkOut: date
-		bookedAt: timestamp
+		*email: string
+		roomNumber: int
+		checkedInAt: timestamp
 	}
-	slice mark_nights_booked["Mark Nights Booked"]
-		booked-->avail
+	readModel guestRoster["Guest Roster"] {
+		*email: string
+		guestName: string
+		roomNumber: int
+		checkedInAt: timestamp
+		isPresent: boolean
+	}
+	domainEvent guestLeft["Guest Left Hotel"] {
+		email: string
+		departedAt: timestamp
+	}
+	slice track_guest_presence["Track Guest Presence"]
+		checkedIn-->guestRoster
+		guestLeft-->guestRoster
 ```
 
 ## Description

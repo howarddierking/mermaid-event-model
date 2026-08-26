@@ -1,6 +1,6 @@
-# Clear Payment
+# Track Outstanding Payments
 
-<!-- slice id: clear_payment -->
+<!-- slice id: track_outstanding_payments -->
 
 ## Model
 
@@ -10,6 +10,14 @@
 
 ```mermaid
 eventModel
+	domainEvent paymentRequested["Payment Requested"] {
+		*paymentId: UUID
+		*bookingId: UUID
+		amount: decimal
+		currency: string
+		paymentMethod: string
+		requestedAt: timestamp
+	}
 	readModel paymentsToProcess["Payments to Process"] {
 		*paymentId: UUID
 		bookingId: UUID
@@ -18,6 +26,12 @@ eventModel
 		paymentMethod: string
 		status: string
 	}
+	domainEvent paymentSubmitted["Payment Submitted"] {
+		*paymentId: UUID
+		bookingId: UUID
+		amount: decimal
+		submittedAt: timestamp
+	}
 	domainEvent paymentSucceeded["Payment Succeeded"] {
 		*paymentId: UUID
 		*bookingId: UUID
@@ -25,7 +39,9 @@ eventModel
 		transactionRef: string
 		succeededAt: timestamp
 	}
-	slice clear_payment["Clear Payment"]
+	slice track_outstanding_payments["Track Outstanding Payments"]
+		paymentRequested-->paymentsToProcess
+		paymentSubmitted-->paymentsToProcess
 		paymentSucceeded-->paymentsToProcess
 ```
 

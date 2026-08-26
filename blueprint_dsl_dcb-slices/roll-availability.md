@@ -29,6 +29,8 @@ eventModel
 		reads [availabilityRolled] by roomNumber
 	domainEvent availabilityRolled["Availability Rolled"] {
 		*roomNumber: int
+		roomType: string
+		capacity: int
 		fromNight: date
 		throughNight: date
 		rolledAt: timestamp
