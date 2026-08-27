@@ -335,6 +335,71 @@ function expandReadModelDuplicates(elements, edges, rank) {
   return { elements: newElements, edges: newEdges, dupeMap };
 }
 
+// A duplicate only earns its keep when it stands in for a long fan-in arc.
+// When two copies of the same read model land in adjacent columns they read as
+// two distinct projections sitting side by side — worse than the arc they were
+// avoiding. Collapse each run of adjacent copies into its leftmost box and let
+// the other source events in the run draw their own short arrows into it.
+function mergeAdjacentReadModelDuplicates(elements, edges, rank, dupeMap) {
+  if (!dupeMap || dupeMap.size === 0) return { elements, edges };
+
+  // The column each element will occupy once ranks are packed: its position
+  // among the distinct ranks still in use. Adjacent columns differ by one.
+  const distinct = [...new Set(elements.map((el) => rank.get(el.id)))].sort(
+    (a, b) => a - b
+  );
+  const colOf = new Map(distinct.map((r, i) => [r, i]));
+  const columnOf = (id) => colOf.get(rank.get(id));
+
+  const mergedInto = new Map();
+  for (const info of dupeMap.values()) {
+    // Left to right: the original sits on the leftmost source event, then each
+    // duplicate on its own source, in source order.
+    const rendered = [info.originalId, ...info.duplicates.map((d) => d.id)];
+
+    // Split into runs of copies occupying consecutive columns. Compare each
+    // copy against the previous one even once that one has been merged away,
+    // so three adjacent copies collapse into one box rather than two.
+    const runs = [[rendered[0]]];
+    for (let i = 1; i < rendered.length; i++) {
+      if (columnOf(rendered[i]) - columnOf(rendered[i - 1]) === 1) {
+        runs[runs.length - 1].push(rendered[i]);
+      } else {
+        runs.push([rendered[i]]);
+      }
+    }
+
+    for (const run of runs) {
+      if (run.length === 1) continue;
+      const survivor = run[0];
+      for (const id of run.slice(1)) mergedInto.set(id, survivor);
+      // Sit the surviving box over the middle of the run so its incoming
+      // arrows stay short and fan out symmetrically instead of all reaching
+      // back to the leftmost column.
+      rank.set(survivor, rank.get(run[Math.floor((run.length - 1) / 2)]));
+    }
+    info.duplicates = info.duplicates.filter((d) => !mergedInto.has(d.id));
+  }
+  if (mergedInto.size === 0) return { elements, edges };
+
+  const resolve = (id) => (mergedInto.has(id) ? mergedInto.get(id) : id);
+  const seen = new Set();
+  const mergedEdges = [];
+  for (const e of edges) {
+    const from = resolve(e.from);
+    const to = resolve(e.to);
+    if (from === to) continue;
+    const key = from + "\u0001" + to;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    mergedEdges.push({ ...e, from, to });
+  }
+  return {
+    elements: elements.filter((el) => !mergedInto.has(el.id)),
+    edges: mergedEdges,
+  };
+}
+
 // Renumber column ranks to consecutive integers, removing any gaps left by
 // manual overrides (e.g. when a read model is shifted leftward into its first
 // source's column, the column it previously occupied becomes empty).
@@ -388,7 +453,7 @@ function layoutEventModel(model) {
   // 2. Expand fan-in read models into duplicate visual stubs. The expander
   //    uses `rank` to decide whether to reroute the original's outgoing
   //    edges to the rightmost duplicate.
-  const { elements, edges, dupeMap } = expandReadModelDuplicates(
+  let { elements, edges, dupeMap } = expandReadModelDuplicates(
     model.elements,
     model.edges,
     rank
@@ -403,6 +468,16 @@ function layoutEventModel(model) {
       rank.set(dup.id, rank.get(dup.sourceId));
     }
   }
+
+  // 3b. Collapse copies that ended up side by side. Duplication buys short
+  //     arrows; when the sources are already neighbours there is no arc to
+  //     shorten, so one box with two incoming arrows is the truer picture.
+  ({ elements, edges } = mergeAdjacentReadModelDuplicates(
+    elements,
+    edges,
+    rank,
+    dupeMap
+  ));
 
   // 4. Pack columns to close gaps left by the overrides.
   packColumns(rank);
