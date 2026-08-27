@@ -1298,25 +1298,27 @@ function genAwsAggregate(out, parts, model, tests) {
     }
   }
 
-  out.line("// ── Aggregate — state is never stored; it is folded from events ─────");
-  out.line("// rehydrate() replays the event stream; validateCommand() enforces the");
-  out.line("// slice's business rules. This is the pure core of the write side.");
-  out.line("export interface AggregateState {");
+  out.line("// ── Decision state — never stored; folded from the boundary events ──");
+  out.line("// rehydrate() folds the events inside the command's consistency boundary");
+  out.line("// (the events readBoundary() returned); validateCommand() enforces the");
+  out.line("// slice's business rules. This is the pure core of the write side. There is");
+  out.line("// no aggregate id or version — the boundary is a tag-scoped set of events,");
+  out.line("// and `eventCount` records how many were folded (for reference/debugging).");
+  out.line("export interface DecisionState {");
   out.push();
-  out.line("aggregateId: string;");
   out.line("status: string | null;");
   for (const [name, ty] of stateFields) {
-    if (name === "aggregateId" || name === "status" || name === "version") continue;
+    if (name === "status" || name === "eventCount") continue;
     out.line(`${name}?: ${ty};`);
   }
-  out.line("version: number;");
+  out.line("eventCount: number;");
   out.pop();
   out.line("}");
   out.blank();
 
-  out.line("export function rehydrate(events: DomainEvent[]): AggregateState {");
+  out.line("export function rehydrate(events: DomainEvent[]): DecisionState {");
   out.push();
-  out.line("let state: AggregateState = { aggregateId: '', status: null, version: 0 };");
+  out.line("let state: DecisionState = { status: null, eventCount: 0 };");
   out.line("for (const event of events) state = applyEvent(state, event);");
   out.line("return state;");
   out.pop();
@@ -1326,7 +1328,7 @@ function genAwsAggregate(out, parts, model, tests) {
   // applyEvent: one case per event the command(s) read (the events that shape
   // state). Fold each event's fields into state; status is left as a TODO the
   // lifecycle rules drive.
-  out.line("function applyEvent(state: AggregateState, event: DomainEvent): AggregateState {");
+  out.line("function applyEvent(state: DecisionState, event: DomainEvent): DecisionState {");
   out.push();
   out.line("switch (event.eventType) {");
   out.push();
@@ -1340,14 +1342,17 @@ function genAwsAggregate(out, parts, model, tests) {
     out.line("return {");
     out.push();
     out.line("...state,");
-    out.line("aggregateId: event.aggregateId,");
     out.line(`// TODO: set the status this event transitions to (e.g. '${constant(ev.id)}').`);
     out.line(`status: state.status,`);
     for (const f of ev.fields || []) {
-      if (f.axis) continue; // identity/axis fields keyed separately
-      out.line(`${camel(f.name)}: event.payload.${camel(f.name)} as ${tsType(f.type)},`);
+      // Tag-axis (*) values live on event.tags; plain fields on event.payload.
+      if (f.axis) {
+        out.line(`${camel(f.name)}: event.tags.${camel(f.name)} as ${tsType(f.type)},`);
+      } else {
+        out.line(`${camel(f.name)}: event.payload.${camel(f.name)} as ${tsType(f.type)},`);
+      }
     }
-    out.line("version: event.version,");
+    out.line("eventCount: state.eventCount + 1,");
     out.pop();
     out.line("};");
     out.pop();
@@ -1368,7 +1373,7 @@ function genAwsAggregate(out, parts, model, tests) {
   out.line("// message — copied verbatim from the slice's `then error[...]` items.");
   out.line("export function validateCommand(");
   out.push();
-  out.line("state: AggregateState,");
+  out.line("state: DecisionState,");
   out.line("command: string");
   out.pop();
   out.line("): string | null {");
@@ -1418,16 +1423,20 @@ function genAwsCommandHandler(out, parts, model) {
   const cmds = parts.command;
   if (cmds.length === 0) return false;
   const producedByCommand = producedByCommandMap(model, parts);
-  const primary = cmds[0];
-  const axis = axesOf(primary)[0] || null;
+  const MAX_RETRIES = 5;
 
-  out.line("// ── Command Lambda (write side) ─────────────────────────────────────");
-  out.line("// API Gateway → this handler. The DCB `reads` boundary becomes a");
-  out.line("// DynamoDB query keyed by aggregateId; the new event is persisted with");
-  out.line("// optimistic concurrency (version) and published to Kinesis. The event");
-  out.line("// store, Kinesis, and response helpers come from the shared runtime.");
+  out.line("// ── Command Lambda (write side, DCB-enforced) ───────────────────────");
+  out.line("// API Gateway → this handler. Each command's `reads [types] by [axes]`");
+  out.line("// becomes a consistency boundary: readBoundary() queries the per-axis");
+  out.line("// GSIs and folds the matching events into decision state; the new event");
+  out.line("// is appended with appendWithinBoundary(), which atomically asserts the");
+  out.line("// boundary has not moved (TransactWriteItems over per-tag guard items) and");
+  out.line("// retries on ConcurrencyError. State, event store, and helpers come from");
+  out.line("// the shared runtime.");
   out.line("import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';");
-  out.line("import { v4 as uuidv4 } from 'uuid';");
+  out.blank();
+
+  out.line("const MAX_RETRIES = " + MAX_RETRIES + ";");
   out.blank();
 
   out.line("export async function handler(");
@@ -1455,13 +1464,19 @@ function genAwsCommandHandler(out, parts, model) {
   out.line("}");
   out.blank();
 
+  const knownEvents = new Map([...parts.domainEvent, ...parts.externalEvent].map((e) => [e.id, e]));
+
   cmds.forEach((cmd) => {
     const cmdType = typeNameFor(cmd);
     const produced = producedByCommand.get(cmd.id) || [];
     const emitted = produced.length ? produced : parts.domainEvent.map((e) => e.id);
     const firstEvent = emitted[0] || null;
-    const isCreation = (cmd.reads || []).length === 0;
-    const cmdAxis = axesOf(cmd)[0] || axis;
+    const ev = firstEvent ? knownEvents.get(firstEvent) : null;
+    const branches = cmd.readBranches || [];
+    const isCreation = branches.length === 0;
+    // Every axis the command scopes by, and every axis the produced event tags.
+    const cmdAxes = axesOf(cmd);
+    const eventAxisFields = (ev && ev.fields ? ev.fields : []).filter((f) => f.axis);
 
     out.line(`async function handle${cmdType}(`);
     out.push();
@@ -1471,77 +1486,136 @@ function genAwsCommandHandler(out, parts, model) {
     out.line("): Promise<APIGatewayProxyResult> {");
     out.push();
 
-    // Command fields available to build the event payload (axis-tag fields
-    // are keyed separately, so they are excluded from the payload set).
-    const cmdFields = (cmd.fields || []).filter((f) => !f.axis);
-    // For a non-creation command the routing id (the axis field, e.g. loanId)
-    // is bound from the path/body as its own `const`, so it must NOT also be
-    // destructured here — that would redeclare the same block-scoped variable.
-    const routingName = !isCreation && cmdAxis ? camel(cmdAxis) : null;
-    const destructured = cmdFields.filter((f) => camel(f.name) !== routingName);
-    if (destructured.length) {
-      out.line(`const { ${destructured.map((f) => camel(f.name)).join(", ")} } = body as {`);
+    // Resolve every axis value this command needs (boundary scoping + event
+    // tags), from the path (single id) or the body. Deduped, one const each.
+    const neededAxes = [...new Set([...cmdAxes, ...eventAxisFields.map((f) => f.name)])];
+    for (const axis of neededAxes) {
+      const v = camel(axis);
+      out.line(`const ${v} = String(event.pathParameters?.id ?? body.${v} ?? '');`);
+    }
+    // Non-axis command fields (the event payload inputs).
+    const payloadFields = (cmd.fields || []).filter((f) => !f.axis && !neededAxes.includes(f.name));
+    if (payloadFields.length) {
+      out.line(`const { ${payloadFields.map((f) => camel(f.name)).join(", ")} } = body as {`);
       out.push();
-      for (const f of destructured) out.line(`${camel(f.name)}?: ${tsType(f.type)};`);
+      for (const f of payloadFields) out.line(`${camel(f.name)}?: ${tsType(f.type)};`);
       out.pop();
       out.line("};");
     }
+    // Validate required axis values are present.
+    for (const axis of cmdAxes) {
+      const v = camel(axis);
+      out.line(`if (!${v}) return response(400, { error: ${tsStr(camel(axis) + " is required")} });`);
+    }
+    out.blank();
+
+    // Build the tags object the produced event carries.
+    const emitTagsObject = () => {
+      if (eventAxisFields.length === 0) { out.line("const tags: Record<string, string> = {};"); return; }
+      out.line("const tags: Record<string, string> = {");
+      out.push();
+      for (const f of eventAxisFields) out.line(`${camel(f.name)}: ${camel(f.name)},`);
+      out.pop();
+      out.line("};");
+    };
+
+    // Build the payload object from the produced event's non-axis fields.
+    const emitPayloadObject = () => {
+      out.line("const payload: Record<string, unknown> = {");
+      out.push();
+      const cmdFieldNames = new Set((cmd.fields || []).map((f) => f.name));
+      for (const f of (ev && ev.fields) || []) {
+        if (f.axis) continue;
+        const src = cmdFieldNames.has(f.name) ? camel(f.name) : `body.${camel(f.name)}`;
+        out.line(`${camel(f.name)}: ${src},`);
+      }
+      out.pop();
+      out.line("};");
+    };
 
     if (isCreation) {
-      out.line(`const aggregateId = uuidv4();`);
-      out.line("const version = 1;");
-      if (firstEvent) {
-        out.line(`const domainEvent = createEvent(aggregateId, version, EventTypes.${eventTypeKey(firstEvent)}, {`);
-        out.push();
-        const ev = [...parts.domainEvent, ...parts.externalEvent].find((e) => e.id === firstEvent);
-        for (const f of (ev && ev.fields) || []) {
-          if (f.axis) continue;
-          out.line(`${camel(f.name)}: ${cmdFields.some((c) => c.name === f.name) ? camel(f.name) : `body.${camel(f.name)}`},`);
-        }
-        out.pop();
-        out.line("});");
+      // No boundary to read: this command is unconditional (a creation). Still
+      // written through appendWithinBoundary (with no guards) for a uniform path.
+      out.line("// Creation command — no `reads`, so the boundary is empty (no guards).");
+      emitTagsObject();
+      emitPayloadObject();
+      if (ev) {
+        out.line(`const domainEvent = createEvent(EventTypes.${eventTypeKey(ev)}, tags, payload);`);
       } else {
-        out.line("const domainEvent = createEvent(aggregateId, version, 'TODO', body);");
+        out.line("const domainEvent = createEvent('TODO', tags, payload);");
       }
+      out.line("await appendWithinBoundary(domainEvent, []);");
+      out.line("await publishToKinesis(domainEvent);");
+      out.line(`return response(201, { eventId: domainEvent.eventId${cmdAxes.length ? ", " + cmdAxes.map((a) => camel(a)).join(", ") : ""} });`);
     } else {
-      // Route id from the axis (e.g. loanId in the path), then load + replay.
-      const idVar = cmdAxis ? camel(cmdAxis) : "aggregateId";
-      out.line(`// The aggregate id (DCB routing axis${cmdAxis ? " '" + cmdAxis + "'" : ""}) identifies the stream to load.`);
-      out.line(`const ${idVar} = event.pathParameters?.id ?? String(body.${idVar} ?? '');`);
-      out.line(`if (!${idVar}) return response(400, { error: '${idVar} is required' });`);
-      out.line(`const events = await loadEvents(${idVar});`);
-      out.line("if (events.length === 0) return response(404, { error: 'Aggregate not found' });");
+      // Emit the boundary criteria from the DSL read branches.
+      out.line("// Consistency boundary (DCB): one branch per DSL `reads [...] by axis`.");
+      const axislessBranches = branches.filter((b) => !b.axes || b.axes.length === 0);
+      if (axislessBranches.length) {
+        out.line("// ── UNSUPPORTED: axis-less `reads` branch ──────────────────────");
+        out.line("// This command declares a `reads [...]` with no `by <axis>`, i.e. an");
+        out.line("// unbounded criterion matching an event type across ALL tags. That has");
+        out.line("// no tag partition to query, so it would require a full-table scan or a");
+        out.line("// dedicated per-eventType GSI. Not generated — resolve the model to");
+        out.line("// scope this branch by an axis, or implement the scan deliberately.");
+        for (const b of axislessBranches) {
+          out.line(`// TODO axis-less branch: reads [${(b.events || []).join(", ")}]`);
+        }
+      }
+      out.line("const criteria: BoundaryBranch[] = [");
+      out.push();
+      for (const b of branches) {
+        if (!b.axes || b.axes.length === 0) continue; // axis-less handled above
+        const axis = b.axes[0];
+        const types = (b.events || []).map((id) => `EventTypes.${eventTypeKey(id)}`).join(", ");
+        out.line(`{ axis: ${tsStr(axis)}, value: ${camel(axis)}, types: [${types}] },`);
+      }
+      out.pop();
+      out.line("];");
+      out.blank();
+
+      // Retry loop around read → validate → append.
+      out.line("for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {");
+      out.push();
+      out.line("const { events, guards } = await readBoundary(criteria);");
       out.line("const state = rehydrate(events);");
       out.blank();
-      out.line("// Enforce business rules against the replayed state.");
+      out.line("// Enforce business rules against the boundary state.");
       out.line(`const validationError = validateCommand(state, ${tsStr(cmdType)});`);
       out.line("if (validationError) return response(409, { error: validationError });");
       out.blank();
-      out.line("const version = state.version + 1;");
-      if (firstEvent) {
-        out.line(`const domainEvent = createEvent(${idVar}, version, EventTypes.${eventTypeKey(firstEvent)}, {`);
-        out.push();
-        const ev = [...parts.domainEvent, ...parts.externalEvent].find((e) => e.id === firstEvent);
-        for (const f of (ev && ev.fields) || []) {
-          if (f.axis) continue;
-          out.line(`${camel(f.name)}: ${cmdFields.some((c) => c.name === f.name) ? camel(f.name) : `body.${camel(f.name)}`},`);
-        }
-        out.pop();
-        out.line("});");
+      emitTagsObject();
+      emitPayloadObject();
+      if (ev) {
+        out.line(`const domainEvent = createEvent(EventTypes.${eventTypeKey(ev)}, tags, payload);`);
       } else {
-        out.line(`const domainEvent = createEvent(${idVar}, version, 'TODO', body);`);
+        out.line("const domainEvent = createEvent('TODO', tags, payload);");
       }
+      out.blank();
+      out.line("try {");
+      out.push();
+      out.line("// Atomic: assert the boundary is unchanged, then append.");
+      out.line("await appendWithinBoundary(domainEvent, guards);");
+      out.line("await publishToKinesis(domainEvent);");
+      out.line(`return response(200, { eventId: domainEvent.eventId${cmdAxes.length ? ", " + cmdAxes.map((a) => camel(a)).join(", ") : ""} });`);
+      out.pop();
+      out.line("} catch (err) {");
+      out.push();
+      out.line("// A concurrent command moved the boundary — reload and retry.");
+      out.line("if (err instanceof ConcurrencyError) continue;");
+      out.line("throw err;");
+      out.pop();
+      out.line("}");
+      out.pop();
+      out.line("}");
+      out.line("return response(409, { error: 'Conflict: boundary contended, retries exhausted' });");
     }
-    out.blank();
-    out.line("await persistEvent(domainEvent);");
-    out.line("await publishToKinesis(domainEvent);");
-    out.line(`return response(${isCreation ? "201" : "200"}, { ${cmdAxis ? camel(cmdAxis) + ": domainEvent.aggregateId, " : ""}version });`);
     out.pop();
     out.line("}");
     out.blank();
   });
 
-  // loadEvents / persistEvent / publishToKinesis / response are imported from
+  // readBoundary / appendWithinBoundary / publishToKinesis / response come from
   // the shared runtime — this file carries only the slice-specific logic.
   return true;
 }
@@ -1583,21 +1657,28 @@ function genAwsProjection(out, parts, model) {
   out.line("}");
   out.blank();
 
+  // The read model's identity field (its *-axis field, or first field) is the
+  // key of each Redis record; its value is read from the event's tags (axis
+  // values live in `tags`), falling back to the event id.
+  const rmKeyField = (rm.fields || []).find((f) => f.axis) || (rm.fields || [])[0];
+  const rmKeyName = rmKeyField ? camel(rmKeyField.name) : "id";
+
   out.line("async function processRecord(client: Redis, record: DynamoDBRecord): Promise<void> {");
   out.push();
   out.line("if (!record.dynamodb?.NewImage) return;");
   out.line("const item = unmarshall(record.dynamodb.NewImage as Record<string, AttributeValue>) as DomainEvent;");
-  out.line("const { aggregateId, eventType, timestamp, payload } = item;");
+  out.line("const { eventId, eventType, timestamp, tags, payload } = item;");
+  out.line(`// The record key: the read model's identity from the event tags, else the eventId.`);
+  out.line(`const recordKey = tags[${tsStr(rmKeyName)}] ?? eventId;`);
   out.line("switch (eventType) {");
   out.push();
   if (sources.length === 0) {
     out.line("// TODO: no source events wired to this read model in the slice edges.");
   }
   for (const evId of sources) {
-    const ev = knownEvents.get(evId);
     out.line(`case EventTypes.${eventTypeKey(evId)}:`);
     out.push();
-    out.line(`await on${pascal(evId)}(client, aggregateId, timestamp, payload);`);
+    out.line(`await on${pascal(evId)}(client, recordKey, timestamp, tags, payload);`);
     out.line("break;");
     out.pop();
   }
@@ -1617,23 +1698,28 @@ function genAwsProjection(out, parts, model) {
     out.line(`async function on${pascal(evId)}(`);
     out.push();
     out.line("client: Redis,");
-    out.line("aggregateId: string,");
+    out.line("recordKey: string,");
     out.line("timestamp: string,");
+    out.line("tags: Record<string, string>,");
     out.line("payload: Record<string, unknown>");
     out.pop();
     out.line("): Promise<void> {");
     out.push();
     out.line(`// Merge ${tsStr(ev ? ev.label : evId)} into the ${view} record.`);
-    out.line(`const existing = await client.get(\`${keyPrefix}:\${aggregateId}\`);`);
-    out.line(`const view: Record<string, unknown> = existing ? JSON.parse(existing) : { ${camel(rm.fields?.find((f) => f.axis)?.name || "id")}: aggregateId };`);
+    out.line(`const existing = await client.get(\`${keyPrefix}:\${recordKey}\`);`);
+    out.line(`const view: Record<string, unknown> = existing ? JSON.parse(existing) : { ${rmKeyName}: recordKey };`);
     for (const f of (ev && ev.fields) || []) {
-      if (f.axis) continue;
-      out.line(`view.${camel(f.name)} = payload.${camel(f.name)};`);
+      // Axis values come from tags; plain fields from payload.
+      if (f.axis) {
+        out.line(`view.${camel(f.name)} = tags.${camel(f.name)};`);
+      } else {
+        out.line(`view.${camel(f.name)} = payload.${camel(f.name)};`);
+      }
     }
     out.line("// TODO: set view.status to the status this event transitions to.");
     out.line(`const pipeline = client.pipeline();`);
-    out.line(`pipeline.set(\`${keyPrefix}:\${aggregateId}\`, JSON.stringify(view));`);
-    out.line(`pipeline.zadd('${keyPrefix}:all', Date.parse(timestamp).toString(), aggregateId);`);
+    out.line(`pipeline.set(\`${keyPrefix}:\${recordKey}\`, JSON.stringify(view));`);
+    out.line(`pipeline.zadd('${keyPrefix}:all', Date.parse(timestamp).toString(), recordKey);`);
     out.line("await pipeline.exec();");
     out.pop();
     out.line("}");
@@ -1711,7 +1797,14 @@ function awsSharedImports(parts) {
   const isCommand = parts.command.length > 0;
   const base = ["DomainEvent", "EventTypes", "createEvent", "response"];
   if (isCommand) {
-    return [...base, "loadEvents", "persistEvent", "publishToKinesis"];
+    return [
+      ...base,
+      "BoundaryBranch",
+      "readBoundary",
+      "appendWithinBoundary",
+      "ConcurrencyError",
+      "publishToKinesis",
+    ];
   }
   // View slice: the projector/query need the Redis accessor instead of the
   // event-store writers.
@@ -1729,13 +1822,17 @@ function awsSharedImports(parts) {
 // the model, deduped by stored name, ordered by first appearance.
 function genAwsSharedEventTypes(out, allEvents) {
   out.line("// ── Domain events — immutable facts in the DynamoDB event store ──────");
-  out.line("// The stored envelope; `eventType` is the language-independent stored name.");
+  out.line("// The stored envelope. Events are keyed by a unique eventId (PK) and a");
+  out.line("// monotonic global `seq` (a ULID). `tags` holds the DCB tag-axis values");
+  out.line("// this event carries (e.g. { roomId, email }); each tag is projected into");
+  out.line("// a per-axis GSI so a consistency boundary can be queried by tag value.");
   out.line("export interface DomainEvent {");
   out.push();
-  out.line("aggregateId: string;");
-  out.line("version: number;");
-  out.line("eventType: string;");
-  out.line("timestamp: string;");
+  out.line("eventId: string;      // unique id (partition key)");
+  out.line("seq: string;          // global monotonic sequence (ULID) — total order");
+  out.line("eventType: string;    // language-independent stored name");
+  out.line("timestamp: string;    // ISO-8601");
+  out.line("tags: Record<string, string>;   // DCB tag-axis values carried by this event");
   out.line("payload: Record<string, unknown>;");
   out.pop();
   out.line("}");
@@ -1765,8 +1862,16 @@ function genAwsSharedRuntime(out) {
   out.line("// ── AWS clients + config (shared by every handler) ──────────────────");
   out.line("import { APIGatewayProxyResult } from 'aws-lambda';");
   out.line("import { DynamoDBClient } from '@aws-sdk/client-dynamodb';");
-  out.line("import { DynamoDBDocumentClient, QueryCommand, PutCommand } from '@aws-sdk/lib-dynamodb';");
+  out.line("import {");
+  out.push();
+  out.line("DynamoDBDocumentClient,");
+  out.line("QueryCommand,");
+  out.line("GetCommand,");
+  out.line("TransactWriteCommand,");
+  out.pop();
+  out.line("} from '@aws-sdk/lib-dynamodb';");
   out.line("import { KinesisClient, PutRecordCommand } from '@aws-sdk/client-kinesis';");
+  out.line("import { ulid } from 'ulid';");
   out.line("import Redis from 'ioredis';");
   out.blank();
   out.line("const dynamodb = DynamoDBDocumentClient.from(new DynamoDBClient({}));");
@@ -1775,55 +1880,208 @@ function genAwsSharedRuntime(out) {
   out.line("const STREAM_NAME = process.env.KINESIS_STREAM_NAME!;");
   out.blank();
 
-  out.line("// Factory for a stored event (stamps the ISO timestamp).");
-  out.line("export function createEvent(");
+  out.line("// ── Dynamic Consistency Boundary (DCB) primitives ───────────────────");
+  out.line("//");
+  out.line("// A DCB is defined per command by its `reads [types] by [axes]` criteria: a");
+  out.line("// set of event types scoped by tag values. There is no fixed aggregate. We");
+  out.line("// enforce the boundary on DynamoDB as follows:");
+  out.line("//");
+  out.line("//   • Each event stores its tag values in `tags` and is written with one");
+  out.line("//     attribute per axis (tag_<axis>) so a per-axis GSI (gsi_<axis>,");
+  out.line("//     partition key tag_<axis>, sort key seq) indexes exactly the events");
+  out.line("//     carrying that tag. A boundary branch is a Query on that GSI.");
+  out.line("//   • GSIs are eventually consistent, so they only SEED the state fold.");
+  out.line("//     Enforcement rides on a strongly-consistent guard item per tag value");
+  out.line("//     (TAGPOS#<axis>#<value>, holding the last seq appended to that tag),");
+  out.line("//     asserted inside a TransactWriteItems. If a concurrent command moved");
+  out.line("//     any guard since we read it, the transaction fails and we retry.");
+  out.blank();
+
+  out.line("// A single branch of a command's boundary: match these event types among");
+  out.line("// events carrying tag <axis> = <value>.");
+  out.line("export interface BoundaryBranch {");
   out.push();
-  out.line("aggregateId: string,");
-  out.line("version: number,");
-  out.line("eventType: string,");
-  out.line("payload: Record<string, unknown>");
+  out.line("axis: string;");
+  out.line("value: string;");
+  out.line("types: readonly string[];");
   out.pop();
-  out.line("): DomainEvent {");
+  out.line("}");
+  out.blank();
+  out.line("// The result of reading a boundary: the matching events (for the caller to");
+  out.line("// fold) and the guard positions observed, which the append asserts unchanged.");
+  out.line("export interface BoundaryRead {");
   out.push();
-  out.line("return { aggregateId, version, eventType, timestamp: new Date().toISOString(), payload };");
+  out.line("events: DomainEvent[];");
+  out.line("guards: { key: string; lastSeq: string | null }[];");
   out.pop();
   out.line("}");
   out.blank();
 
-  out.line("// Load an aggregate's full event stream (oldest first) for replay.");
-  out.line("export async function loadEvents(aggregateId: string): Promise<DomainEvent[]> {");
+  out.line("const tagPosKey = (axis: string, value: string) => `TAGPOS#${axis}#${value}`;");
+  out.blank();
+
+  out.line("// Factory for a stored event. `tags` are the DCB tag-axis values (e.g.");
+  out.line("// { roomId, email }); a fresh ULID gives a globally monotonic seq.");
+  out.line("export function createEvent(");
+  out.push();
+  out.line("eventType: string,");
+  out.line("tags: Record<string, string>,");
+  out.line("payload: Record<string, unknown>");
+  out.pop();
+  out.line("): DomainEvent {");
+  out.push();
+  out.line("return {");
+  out.push();
+  out.line("eventId: ulid(),");
+  out.line("seq: ulid(),");
+  out.line("eventType,");
+  out.line("timestamp: new Date().toISOString(),");
+  out.line("tags,");
+  out.line("payload,");
+  out.pop();
+  out.line("};");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  out.line("// Query one boundary branch: all events carrying tag <axis> = <value>,");
+  out.line("// restricted to the branch's event types. Reads the per-axis GSI. Because");
+  out.line("// GSIs are eventually consistent, the result only seeds the state fold —");
+  out.line("// enforcement is the guard asserted in appendWithinBoundary.");
+  out.line("export async function queryBoundaryBranch(branch: BoundaryBranch): Promise<DomainEvent[]> {");
   out.push();
   out.line("const result = await dynamodb.send(");
   out.push();
   out.line("new QueryCommand({");
   out.push();
   out.line("TableName: TABLE_NAME,");
-  out.line("KeyConditionExpression: 'aggregateId = :id',");
-  out.line("ExpressionAttributeValues: { ':id': aggregateId },");
-  out.line("ScanIndexForward: true, // oldest first");
+  out.line("IndexName: `gsi_${branch.axis}`,");
+  out.line("KeyConditionExpression: `tag_${branch.axis} = :v`,");
+  out.line("ExpressionAttributeValues: { ':v': branch.value },");
+  out.line("ScanIndexForward: true, // oldest first, by seq");
   out.pop();
   out.line("})");
   out.pop();
   out.line(");");
-  out.line("return (result.Items || []) as DomainEvent[];");
+  out.line("const items = (result.Items || []) as DomainEvent[];");
+  out.line("return items.filter((e) => branch.types.includes(e.eventType));");
   out.pop();
   out.line("}");
   out.blank();
 
-  out.line("// Persist a new event with optimistic concurrency on (aggregateId, version).");
-  out.line("export async function persistEvent(domainEvent: DomainEvent): Promise<void> {");
+  out.line("// Read the whole boundary: fold-events from every branch (deduped by");
+  out.line("// eventId, ordered by seq) plus the strongly-consistent guard position for");
+  out.line("// each distinct tag value. The guards are what the append asserts unchanged.");
+  out.line("export async function readBoundary(criteria: BoundaryBranch[]): Promise<BoundaryRead> {");
   out.push();
-  out.line("await dynamodb.send(");
+  out.line("// Fold events, seeded from the (eventually consistent) GSIs.");
+  out.line("const byId = new Map<string, DomainEvent>();");
+  out.line("for (const branch of criteria) {");
   out.push();
-  out.line("new PutCommand({");
-  out.push();
-  out.line("TableName: TABLE_NAME,");
-  out.line("Item: domainEvent,");
-  out.line("ConditionExpression: 'attribute_not_exists(aggregateId) AND attribute_not_exists(version)',");
+  out.line("for (const e of await queryBoundaryBranch(branch)) byId.set(e.eventId, e);");
   out.pop();
-  out.line("})");
+  out.line("}");
+  out.line("const events = [...byId.values()].sort((a, b) => (a.seq < b.seq ? -1 : a.seq > b.seq ? 1 : 0));");
+  out.blank();
+  out.line("// Strongly-consistent guard read: one TAGPOS item per distinct (axis,value).");
+  out.line("const seenKeys = new Set<string>();");
+  out.line("const guards: { key: string; lastSeq: string | null }[] = [];");
+  out.line("for (const branch of criteria) {");
+  out.push();
+  out.line("const key = tagPosKey(branch.axis, branch.value);");
+  out.line("if (seenKeys.has(key)) continue;");
+  out.line("seenKeys.add(key);");
+  out.line("const res = await dynamodb.send(");
+  out.push();
+  out.line("new GetCommand({ TableName: TABLE_NAME, Key: { eventId: key, seq: 'POS' }, ConsistentRead: true })");
   out.pop();
   out.line(");");
+  out.line("guards.push({ key, lastSeq: (res.Item?.lastSeq as string | undefined) ?? null });");
+  out.pop();
+  out.line("}");
+  out.line("return { events, guards };");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  out.line("// Thrown when the boundary moved between read and append; the caller retries.");
+  out.line("export class ConcurrencyError extends Error {");
+  out.push();
+  out.line("constructor() { super('DCB boundary changed; retry'); this.name = 'ConcurrencyError'; }");
+  out.pop();
+  out.line("}");
+  out.blank();
+
+  out.line("// Append an event within its consistency boundary, atomically. In one");
+  out.line("// TransactWriteItems we: (1) assert each observed TAGPOS guard is unchanged,");
+  out.line("// (2) Put the event (with tag_<axis> attributes so the GSIs index it), and");
+  out.line("// (3) advance each TAGPOS guard to this event's seq. If any guard moved, the");
+  out.line("// transaction is cancelled and we raise ConcurrencyError.");
+  out.line("export async function appendWithinBoundary(");
+  out.push();
+  out.line("domainEvent: DomainEvent,");
+  out.line("guards: { key: string; lastSeq: string | null }[]");
+  out.pop();
+  out.line("): Promise<void> {");
+  out.push();
+  out.line("// The item carries a tag_<axis> attribute per tag so each gsi_<axis> indexes it.");
+  out.line("const item: Record<string, unknown> = { ...domainEvent };");
+  out.line("for (const [axis, value] of Object.entries(domainEvent.tags)) item[`tag_${axis}`] = value;");
+  out.blank();
+  out.line("const txItems: unknown[] = [");
+  out.push();
+  out.line("{ Put: { TableName: TABLE_NAME, Item: item, ConditionExpression: 'attribute_not_exists(eventId)' } },");
+  out.pop();
+  out.line("];");
+  out.line("for (const g of guards) {");
+  out.push();
+  out.line("// Guard unchanged since read …");
+  out.line("if (g.lastSeq === null) {");
+  out.push();
+  out.line("txItems.push({ ConditionCheck: {");
+  out.push();
+  out.line("TableName: TABLE_NAME, Key: { eventId: g.key, seq: 'POS' },");
+  out.line("ConditionExpression: 'attribute_not_exists(lastSeq)',");
+  out.pop();
+  out.line("} });");
+  out.pop();
+  out.line("} else {");
+  out.push();
+  out.line("txItems.push({ ConditionCheck: {");
+  out.push();
+  out.line("TableName: TABLE_NAME, Key: { eventId: g.key, seq: 'POS' },");
+  out.line("ConditionExpression: 'lastSeq = :prev',");
+  out.line("ExpressionAttributeValues: { ':prev': g.lastSeq },");
+  out.pop();
+  out.line("} });");
+  out.pop();
+  out.line("}");
+  out.line("// … then advance it to this event's seq.");
+  out.line("txItems.push({ Update: {");
+  out.push();
+  out.line("TableName: TABLE_NAME, Key: { eventId: g.key, seq: 'POS' },");
+  out.line("UpdateExpression: 'SET lastSeq = :seq',");
+  out.line("ExpressionAttributeValues: { ':seq': domainEvent.seq },");
+  out.pop();
+  out.line("} });");
+  out.pop();
+  out.line("}");
+  out.blank();
+  out.line("try {");
+  out.push();
+  out.line("await dynamodb.send(new TransactWriteCommand({ TransactItems: txItems as never }));");
+  out.pop();
+  out.line("} catch (err: unknown) {");
+  out.push();
+  out.line("const name = (err as { name?: string }).name;");
+  out.line("if (name === 'TransactionCanceledException' || name === 'ConditionalCheckFailedException') {");
+  out.push();
+  out.line("throw new ConcurrencyError();");
+  out.pop();
+  out.line("}");
+  out.line("throw err;");
+  out.pop();
+  out.line("}");
   out.pop();
   out.line("}");
   out.blank();
@@ -1836,7 +2094,7 @@ function genAwsSharedRuntime(out) {
   out.line("new PutRecordCommand({");
   out.push();
   out.line("StreamName: STREAM_NAME,");
-  out.line("PartitionKey: domainEvent.aggregateId,");
+  out.line("PartitionKey: domainEvent.eventId,");
   out.line("Data: Buffer.from(JSON.stringify(domainEvent)),");
   out.pop();
   out.line("})");
@@ -2040,7 +2298,45 @@ function genAwsRegionalStack(out, model, parts, modelName, tier) {
   out.blank();
 
   if (hasCommand) {
+    // Compute the DCB tag axes across every command in the model — each needs a
+    // GSI (partition key tag_<axis>, sort key seq) on the event table so a
+    // boundary branch can be queried by tag value.
+    const dcbAxes = new Set();
+    for (const el of model.elements) {
+      if (el.kind !== "command") continue;
+      for (const a of axesOf(el)) dcbAxes.add(a);
+    }
+    const axisList = [...dcbAxes];
+    out.line("// ── DCB event-store indexes (required on props.globalTable) ─────────");
+    out.line("// A Dynamic Consistency Boundary is queried by tag value, so the event");
+    out.line("// table must expose one GSI per tag axis used across the model:");
+    if (axisList.length) {
+      for (const a of axisList) {
+        out.line(`//   • gsi_${a}: partitionKey = 'tag_${a}' (string), sortKey = 'seq' (string)`);
+      }
+    } else {
+      out.line("//   • (no tag axes declared in this model)");
+    }
+    out.line("// The table's own key schema is: partitionKey = 'eventId' (string),");
+    out.line("// sortKey = 'seq' (string). Guard items reuse it: eventId = 'TAGPOS#<axis>#<value>',");
+    out.line("// seq = 'POS'. Declare these GSIs where props.globalTable is created; add");
+    out.line("// them with addGlobalSecondaryIndex(...) if the table is defined in this app:");
+    if (axisList.length) {
+      out.line("/*");
+      for (const a of axisList) {
+        out.line(`  props.globalTable.addGlobalSecondaryIndex({`);
+        out.line(`    indexName: 'gsi_${a}',`);
+        out.line(`    partitionKey: { name: 'tag_${a}', type: dynamodb.AttributeType.STRING },`);
+        out.line(`    sortKey: { name: 'seq', type: dynamodb.AttributeType.STRING },`);
+        out.line(`    projectionType: dynamodb.ProjectionType.ALL,`);
+        out.line(`  });`);
+      }
+      out.line("*/");
+    }
+    out.blank();
     out.line("// Command handler (write side) — EVENT_TABLE_NAME + Kinesis, grants R/W.");
+    out.line("// grantReadWriteData covers Query on the table + its GSIs and");
+    out.line("// TransactWriteItems (the DCB conditional append).");
     out.line("const commandHandler = new nodejs.NodejsFunction(this, 'CommandHandler', {");
     out.push();
     out.line("...commonProps,");
