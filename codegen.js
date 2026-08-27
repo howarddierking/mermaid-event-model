@@ -1345,9 +1345,13 @@ function genAwsAggregate(out, parts, model, tests) {
     out.line(`// TODO: set the status this event transitions to (e.g. '${constant(ev.id)}').`);
     out.line(`status: state.status,`);
     for (const f of ev.fields || []) {
-      // Tag-axis (*) values live on event.tags; plain fields on event.payload.
+      // Tag-axis (*) values live on event.tags (always strings); plain fields
+      // on event.payload. Tags cast through `unknown` since the stored tag is a
+      // string even when the field's declared type is numeric.
       if (f.axis) {
-        out.line(`${camel(f.name)}: event.tags.${camel(f.name)} as ${tsType(f.type)},`);
+        const t = tsType(f.type);
+        const cast = t === "string" ? "as string" : `as unknown as ${t}`;
+        out.line(`${camel(f.name)}: event.tags.${camel(f.name)} ${cast},`);
       } else {
         out.line(`${camel(f.name)}: event.payload.${camel(f.name)} as ${tsType(f.type)},`);
       }
