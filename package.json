@@ -8,6 +8,7 @@
     ".": "./index.js",
     "./core": "./event-model.js",
     "./event-model": "./event-model-mermaid.js",
+    "./diff": "./event-model-diff.js",
     "./slice-tests": "./slice-tests-mermaid.js",
     "./slice-tests-core": "./slice-tests.js"
   },
@@ -15,6 +16,7 @@
     "index.js",
     "event-model.js",
     "event-model-mermaid.js",
+    "event-model-diff.js",
     "slice-tests.js",
     "slice-tests-mermaid.js",
     "settings.png",

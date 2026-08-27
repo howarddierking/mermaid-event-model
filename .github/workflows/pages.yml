@@ -31,9 +31,9 @@ jobs:
         run: |
           mkdir -p _site
           # HTML entry points
-          cp index.html model-viewer.html core-playground.html _site/
+          cp index.html model-viewer.html core-playground.html diff-playground.html _site/
           # ES modules (index.js transitively imports the rest)
-          cp index.js event-model.js event-model-mermaid.js \
+          cp index.js event-model.js event-model-mermaid.js event-model-diff.js \
              slice-tests.js slice-tests-mermaid.js _site/
           # Gear icon for automation nodes (event-model.js resolves ./settings.png)
           cp settings.png _site/
