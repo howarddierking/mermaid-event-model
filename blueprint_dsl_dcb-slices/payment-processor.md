@@ -10,7 +10,7 @@
 
 ```mermaid
 eventModel
-	actor Guest
+	actor System
 	readModel paymentsToProcess["Payments to Process"] {
 		*paymentId: UUID
 		bookingId: UUID
@@ -19,7 +19,7 @@ eventModel
 		paymentMethod: string
 		status: string
 	}
-	automation:Guest paymentProcessor["Payment Processor"]
+	automation:System paymentProcessor["Payment Processor"]
 	command submitPayment["Submit Payment"] {
 		paymentId: UUID
 		amount: decimal

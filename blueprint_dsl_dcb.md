@@ -8,17 +8,19 @@ The same hotel-booking model rewritten in Dynamic Consistency Boundary style: no
 eventModel
 	actor Manager
 	actor Guest
+	actor System
 
 	ui:Guest reg_ui["Registration UI"] {
 		name: string
 		email: string
 		password: string
 	}
-	command Register reads [Registered] {
+	command Register {
 		name: string
 		email: string
 		password: string
 	}
+		reads [Registered] by email
 	domainEvent Registered {
 		*email: string
 		name: string
@@ -40,46 +42,84 @@ eventModel
 		roomType: string
 		capacity: int
 	}
-		reads [ra] by roomNumber
-	domainEvent ra["Room Added"] {
-		*roomId: UUID
+		reads [roomAdded] by roomNumber
+	domainEvent roomAdded["Room Added"] {
 		*roomNumber: int
 		floor: int
 		roomType: string
 		capacity: int
 	}
 	readModel avail["Room Availability"] {
-		*roomId: UUID
-		roomNumber: int
+		*roomNumber: int
+		*night: date
 		roomType: string
+		capacity: int
 		isAvailable: boolean
-		nextCheckIn: date
 	}
 	slice add_room["Add Room"]
 		room_ui-->addRoom
-		addRoom-->ra
+		addRoom-->roomAdded
+
+	externalEvent weekElapsed["Week Elapsed"] {
+		occurredAt: date
+	}
+	readModel horizon["Availability Horizon"] {
+		*roomNumber: int
+		roomType: string
+		capacity: int
+		seededThrough: date
+		requiredThrough: date
+	}
+	automation:System availabilityMaintainer["Availability Maintainer"]
+	command rollAvailability["Roll Availability"] {
+		roomNumber: int
+		roomType: string
+		capacity: int
+		fromNight: date
+		throughNight: date
+	}
+		reads [availabilityRolled] by roomNumber
+	domainEvent availabilityRolled["Availability Rolled"] {
+		*roomNumber: int
+		roomType: string
+		capacity: int
+		fromNight: date
+		throughNight: date
+		rolledAt: timestamp
+	}
+	slice track_availability_horizon["Track Availability Horizon"]
+		roomAdded-->horizon
+		weekElapsed-->horizon
+		availabilityRolled-->horizon
+
+	slice roll_availability["Roll Availability"]
+		horizon-->availabilityMaintainer
+		availabilityMaintainer-->rollAvailability
+		rollAvailability-->availabilityRolled
 
 	slice view_room_availability["View Room Availability"]
-		ra-->avail
+		availabilityRolled-->avail
+		booked-->avail
 		avail-->booking_ui
 
 	ui:Guest booking_ui["Booking Screen"] {
-		roomId: UUID
+		roomNumber: int
 		roomType: string
+		capacity: int
 		checkIn: date
 		checkOut: date
 	}
 	command bookRoom["Book Room"] {
 		email: string
-		roomId: UUID
+		roomNumber: int
 		checkIn: date
 		checkOut: date
 	}
-		reads [ra, booked, checkedOut] by roomId
+		reads [roomAdded, booked, checkedOut] by roomNumber
 		reads [Registered] by email
 	domainEvent booked["Room Booked"] {
 		*bookingId: UUID
-		*roomId: UUID
+		*roomNumber: int
 		email: string
 		checkIn: date
 		checkOut: date
@@ -90,23 +130,21 @@ eventModel
 		bookRoom-->booked
 
 	readModel cleaning_schedule["Cleaning Schedule"] {
-		*roomId: UUID
-		roomNumber: int
+		*roomNumber: int
 		guestCheckOut: date
 		cleaningStatus: string
 	}
 	ui:Manager maintenance_ui["Maintenance UI"] {
-		roomId: UUID
 		roomNumber: int
 		cleaningStatus: string
 	}
 	command readyRoom["Ready Room"] {
-		roomId: UUID
+		roomNumber: int
 		cleanedBy: string
 	}
-		reads [ra, checkedOut, ready] by roomId
+		reads [roomAdded, checkedOut, ready] by roomNumber
 	domainEvent ready["Room Readied"] {
-		*roomId: UUID
+		*roomNumber: int
 		readiedAt: timestamp
 	}
 	slice view_cleaning_schedule["View Cleaning Schedule"]
@@ -129,7 +167,7 @@ eventModel
 	domainEvent checkedIn["Checked In"] {
 		*bookingId: UUID
 		*email: string
-		roomId: UUID
+		roomNumber: int
 		checkedInAt: timestamp
 	}
 	readModel guestRoster["Guest Roster"] {
@@ -161,21 +199,19 @@ eventModel
 		positionUpdated-->hotelProximityTranslator
 		hotelProximityTranslator-->guestLeft
 
-	automation:Manager checkOutAutomation["Check-out Automation"]
+	automation:System checkOutAutomation["Check-out Automation"]
 	command checkOut["Checked Out"] {
 		bookingId: UUID
 	}
 		reads [checkedIn, checkedOut] by bookingId
 	domainEvent checkedOut["Checked Out"] {
 		*bookingId: UUID
-		*roomId: UUID
+		*roomNumber: int
 		*email: string
 		checkedOutAt: timestamp
 	}
-	slice feed_checked_in["Feed: Checked In"]
+	slice track_guest_presence["Track Guest Presence"]
 		checkedIn-->guestRoster
-
-	slice feed_guest_left["Feed: Guest Left Hotel"]
 		guestLeft-->guestRoster
 
 	slice check_out_automation["Check-out Automation"]
@@ -216,7 +252,7 @@ eventModel
 		payment_ui-->pay
 		pay-->paymentRequested
 
-	automation:Guest paymentProcessor["Payment Processor"]
+	automation:System paymentProcessor["Payment Processor"]
 	command submitPayment["Submit Payment"] {
 		paymentId: UUID
 		amount: decimal
@@ -230,13 +266,9 @@ eventModel
 		amount: decimal
 		submittedAt: timestamp
 	}
-	slice feed_payment_requested["Feed: Payment Requested"]
+	slice track_outstanding_payments["Track Outstanding Payments"]
 		paymentRequested-->paymentsToProcess
-
-	slice feed_payment_submitted["Feed: Payment Submitted"]
 		paymentSubmitted-->paymentsToProcess
-
-	slice feed_payment_succeeded["Feed: Payment Succeeded"]
 		paymentSucceeded-->paymentsToProcess
 
 	slice payment_processor["Payment Processor"]

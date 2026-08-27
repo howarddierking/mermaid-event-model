@@ -12,17 +12,16 @@
 eventModel
 	actor Manager
 	ui:Manager maintenance_ui["Maintenance UI"] {
-		roomId: UUID
 		roomNumber: int
 		cleaningStatus: string
 	}
 	command readyRoom["Ready Room"] {
-		roomId: UUID
+		roomNumber: int
 		cleanedBy: string
 	}
-		reads [ra, checkedOut, ready] by roomId
+		reads [roomAdded, checkedOut, ready] by roomNumber
 	domainEvent ready["Room Readied"] {
-		*roomId: UUID
+		*roomNumber: int
 		readiedAt: timestamp
 	}
 	slice ready_room["Ready Room"]

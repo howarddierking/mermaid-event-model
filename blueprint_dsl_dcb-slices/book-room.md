@@ -12,22 +12,23 @@
 eventModel
 	actor Guest
 	ui:Guest booking_ui["Booking Screen"] {
-		roomId: UUID
+		roomNumber: int
 		roomType: string
+		capacity: int
 		checkIn: date
 		checkOut: date
 	}
 	command bookRoom["Book Room"] {
 		email: string
-		roomId: UUID
+		roomNumber: int
 		checkIn: date
 		checkOut: date
 	}
-		reads [ra, booked, checkedOut] by roomId
+		reads [roomAdded, booked, checkedOut] by roomNumber
 		reads [Registered] by email
 	domainEvent booked["Room Booked"] {
 		*bookingId: UUID
-		*roomId: UUID
+		*roomNumber: int
 		email: string
 		checkIn: date
 		checkOut: date
@@ -49,24 +50,24 @@ sliceTests
 	test["Books a room and emits Room Booked for the specified room"]
 		when
 			command["Book Room"] {
-				roomId: UUID = "room-101"
+				roomNumber: int = 101
 			}
 		then
 			domainEvent["Room Booked"] {
 				bookingId: UUID = "bk-001"
-				roomId: UUID = "room-101"
+				roomNumber: int = 101
 			}
 
 	test["Rejects booking when an existing booking overlaps the dates"]
 		given
 			domainEvent["Room Booked"] {
-				roomId: UUID = "room-101"
+				roomNumber: int = 101
 				checkIn: date = 2026-08-10
 				checkOut: date = 2026-08-14
 			}
 		when
 			command["Book Room"] {
-				roomId: UUID = "room-101"
+				roomNumber: int = 101
 				checkIn: date = 2026-08-12
 				checkOut: date = 2026-08-16
 			}
@@ -77,24 +78,24 @@ sliceTests
 		given
 			domainEvent["Room Booked"] {
 				bookingId: UUID = "bk-001"
-				roomId: UUID = "room-101"
+				roomNumber: int = 101
 				checkIn: date = 2026-08-10
 				checkOut: date = 2026-08-14
 			}
 			domainEvent["Checked Out"] {
 				bookingId: UUID = "bk-001"
-				roomId: UUID = "room-101"
+				roomNumber: int = 101
 				checkedOutAt: timestamp = 2026-08-11T09:30:00Z
 			}
 		when
 			command["Book Room"] {
-				roomId: UUID = "room-101"
+				roomNumber: int = 101
 				checkIn: date = 2026-08-12
 				checkOut: date = 2026-08-16
 			}
 		then
 			domainEvent["Room Booked"] {
 				bookingId: UUID = "bk-002"
-				roomId: UUID = "room-101"
+				roomNumber: int = 101
 			}
 ```

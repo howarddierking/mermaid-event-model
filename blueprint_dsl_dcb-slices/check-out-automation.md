@@ -10,7 +10,7 @@
 
 ```mermaid
 eventModel
-	actor Manager
+	actor System
 	readModel guestRoster["Guest Roster"] {
 		*email: string
 		guestName: string
@@ -18,14 +18,14 @@ eventModel
 		checkedInAt: timestamp
 		isPresent: boolean
 	}
-	automation:Manager checkOutAutomation["Check-out Automation"]
+	automation:System checkOutAutomation["Check-out Automation"]
 	command checkOut["Checked Out"] {
 		bookingId: UUID
 	}
 		reads [checkedIn, checkedOut] by bookingId
 	domainEvent checkedOut["Checked Out"] {
 		*bookingId: UUID
-		*roomId: UUID
+		*roomNumber: int
 		*email: string
 		checkedOutAt: timestamp
 	}

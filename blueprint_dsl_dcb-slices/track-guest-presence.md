@@ -1,6 +1,6 @@
-# Feed: Guest Left Hotel
+# Track Guest Presence
 
-<!-- slice id: feed_guest_left -->
+<!-- slice id: track_guest_presence -->
 
 ## Model
 
@@ -10,6 +10,12 @@
 
 ```mermaid
 eventModel
+	domainEvent checkedIn["Checked In"] {
+		*bookingId: UUID
+		*email: string
+		roomNumber: int
+		checkedInAt: timestamp
+	}
 	readModel guestRoster["Guest Roster"] {
 		*email: string
 		guestName: string
@@ -21,7 +27,8 @@ eventModel
 		email: string
 		departedAt: timestamp
 	}
-	slice feed_guest_left["Feed: Guest Left Hotel"]
+	slice track_guest_presence["Track Guest Presence"]
+		checkedIn-->guestRoster
 		guestLeft-->guestRoster
 ```
 

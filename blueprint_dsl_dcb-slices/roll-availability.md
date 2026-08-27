@@ -1,33 +1,44 @@
-# Feed: Payment Requested
+# Roll Availability
 
-<!-- slice id: feed_payment_requested -->
+<!-- slice id: roll_availability -->
 
 ## Model
 
 <!-- Derived from the parent eventModel and refreshed on every spec-slices run. Do not hand-edit. -->
 
-**Pattern:** View
+**Pattern:** Automation
 
 ```mermaid
 eventModel
-	domainEvent paymentRequested["Payment Requested"] {
-		*paymentId: UUID
-		*bookingId: UUID
-		amount: decimal
-		currency: string
-		paymentMethod: string
-		requestedAt: timestamp
+	actor System
+	readModel horizon["Availability Horizon"] {
+		*roomNumber: int
+		roomType: string
+		capacity: int
+		seededThrough: date
+		requiredThrough: date
 	}
-	readModel paymentsToProcess["Payments to Process"] {
-		*paymentId: UUID
-		bookingId: UUID
-		amount: decimal
-		currency: string
-		paymentMethod: string
-		status: string
+	automation:System availabilityMaintainer["Availability Maintainer"]
+	command rollAvailability["Roll Availability"] {
+		roomNumber: int
+		roomType: string
+		capacity: int
+		fromNight: date
+		throughNight: date
 	}
-	slice feed_payment_requested["Feed: Payment Requested"]
-		paymentRequested-->paymentsToProcess
+		reads [availabilityRolled] by roomNumber
+	domainEvent availabilityRolled["Availability Rolled"] {
+		*roomNumber: int
+		roomType: string
+		capacity: int
+		fromNight: date
+		throughNight: date
+		rolledAt: timestamp
+	}
+	slice roll_availability["Roll Availability"]
+		horizon-->availabilityMaintainer
+		availabilityMaintainer-->rollAvailability
+		rollAvailability-->availabilityRolled
 ```
 
 ## Description

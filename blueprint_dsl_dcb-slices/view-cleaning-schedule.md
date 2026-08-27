@@ -13,20 +13,18 @@ eventModel
 	actor Manager
 	domainEvent booked["Room Booked"] {
 		*bookingId: UUID
-		*roomId: UUID
+		*roomNumber: int
 		email: string
 		checkIn: date
 		checkOut: date
 		bookedAt: timestamp
 	}
 	readModel cleaning_schedule["Cleaning Schedule"] {
-		*roomId: UUID
-		roomNumber: int
+		*roomNumber: int
 		guestCheckOut: date
 		cleaningStatus: string
 	}
 	ui:Manager maintenance_ui["Maintenance UI"] {
-		roomId: UUID
 		roomNumber: int
 		cleaningStatus: string
 	}

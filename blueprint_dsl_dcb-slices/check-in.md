@@ -23,7 +23,7 @@ eventModel
 	domainEvent checkedIn["Checked In"] {
 		*bookingId: UUID
 		*email: string
-		roomId: UUID
+		roomNumber: int
 		checkedInAt: timestamp
 	}
 	slice check_in["Check-in"]

@@ -22,6 +22,10 @@ import * as d3 from "d3";
 //               domainEvent["<Label>"]
 //               error["<Message>"]    (expected rejection — code-gen maps
 //                                       to throwing a domain exception)
+//               none["<Message>"]     (expected EMPTY result — the query the
+//                                       slice describes matched no rows. Not
+//                                       a rejection: nothing went wrong, there
+//                                       is simply nothing to show)
 //               ...
 //
 // Each test renders as a self-contained card with its own Given / When / Then
@@ -60,7 +64,7 @@ function parseSliceTests(src) {
   // is prose that can be reworded or translated without breaking anyone.
   // All-hyphen, e.g. error guest-already-registered["..."].
   const itemRe =
-    /^(domainEvent|externalEvent|command|readModel|automation|ui|error)(?:\s+([a-z][a-z0-9-]*))?\s*\["([^"]*)"\]\s*(\{)?\s*$/;
+    /^(domainEvent|externalEvent|command|readModel|automation|ui|error|none)(?:\s+([a-z][a-z0-9-]*))?\s*\["([^"]*)"\]\s*(\{)?\s*$/;
   // name: type            (type only, as in eventModel)
   // name: type = value     (sliceTests-only example value; value is the raw
   //                         text after `=`, e.g. 101, "a1b2", 2026-08-10, true)
@@ -297,6 +301,9 @@ const ITEM_STYLES = {
   automation:    { fill: "#ffffff", stroke: "#475569", rx: 4, dash: "4 2" },
   ui:            { fill: "#ffffff", stroke: "#475569", rx: 4 },
   error:         { fill: "#f87171", stroke: "#7f1d1d", rx: 4 },
+  // An empty result is an outcome, not a failure: same neutral grey as a
+  // wireframe, dashed to read as "nothing here" rather than a thing.
+  none:          { fill: "#f1f5f9", stroke: "#94a3b8", rx: 4, dash: "4 2" },
 };
 
 const ITEM_H_BASE_RENDER = 56;

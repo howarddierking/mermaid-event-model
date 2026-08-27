@@ -227,7 +227,7 @@ The renderer draws a dashed bounding box around the member nodes with the slice'
 
 ## Slice Tests
 
-The companion `sliceTests` diagram type expresses test specifications for a vertical slice in **Given / When / Then** form. The element kinds (`domainEvent`, `externalEvent`, `command`, `readModel`, `automation`, `ui`) and visual styling match the `eventModel` diagram, so the visual vocabulary is the same on both sides. One additional kind, `error["<message>"]`, is sliceTests-only — see [Expressing errors](#expressing-errors) below.
+The companion `sliceTests` diagram type expresses test specifications for a vertical slice in **Given / When / Then** form. The element kinds (`domainEvent`, `externalEvent`, `command`, `readModel`, `automation`, `ui`) and visual styling match the `eventModel` diagram, so the visual vocabulary is the same on both sides. Two additional kinds are sliceTests-only: `error["<message>"]` and `none["<message>"]` — see [Expressing errors](#expressing-errors) and [Expressing an empty result](#expressing-an-empty-result) below.
 
 ```
 sliceTests
@@ -261,6 +261,31 @@ test["Reject duplicate room number"]
 ```
 
 Errors render as red boxes (`#f87171` fill, `#7f1d1d` stroke), distinct from any other kind so a glance tells you "this test asserts a rejection." Downstream code generation reads the message verbatim: each `error[...]` maps to throwing the target framework's domain exception with the message used unchanged, so the test's rejection assertion stays a one-line mapping from the DSL.
+
+### Expressing an empty result
+
+`none["<message>"]` asserts the opposite of a populated read model: the query the slice describes **matched nothing**. It is not a rejection — nothing went wrong, there is simply nothing to show — so it is a separate kind from `error`, and it renders in neutral grey with a dashed border rather than red.
+
+It exists because a View slice's test is a query, and a query's most interesting case is often the empty one. In a room-availability view whose rows are seeded only out to a booking horizon, a search beyond that horizon must return no rooms — and the naive implementation ("no unavailable row exists") returns *every* room instead. Only an explicit empty-result assertion catches that.
+
+```mermaid
+sliceTests
+	test["No rooms offered when the stay runs past the seeded horizon"]
+		given
+			domainEvent["Availability Rolled"] {
+				roomNumber: int = 101
+				throughNight: date = 2027-02-21
+			}
+		when
+			ui["Booking Screen"] {
+				checkIn: date = 2027-03-01
+				checkOut: date = 2027-03-04
+			}
+		then
+			none["No rooms match the requested dates"]
+```
+
+Note the `when` block holds a `ui` rather than a command. For a View slice there is no command under test — the "action" is a person querying the view with criteria, and the `ui` item carries those criteria as example values. Code generation reads them as the query's arguments and the `none[...]` message as the expected empty-state text.
 
 An error may also carry a **stable code** between the kind and the label:
 

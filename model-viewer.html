@@ -473,6 +473,9 @@ async function loadAndRender() {
       console.error('mermaid render error', err);
     }
 
+    // Wire slice-label chips to their spec files (upstream navigation).
+    wireSliceLinks();
+
     // Code generation is per-slice: show one panel at the top of the content
     // whenever the source declares an eventModel block (slice specs and the
     // model overview). It reads the raw markdown (`src`), whose eventModel and
@@ -482,6 +485,26 @@ async function loadAndRender() {
       attachCodegenPanel(content, src, sliceName);
     }
   }
+}
+
+// The renderer stamps each slice group with the spec filename it corresponds
+// to; routing to that file is the viewer's job, so the chips reuse the same
+// navigation the sidebar links use.
+function wireSliceLinks() {
+  content.querySelectorAll('g.slice[data-slice-slug]').forEach((g) => {
+    const slug = g.getAttribute('data-slice-slug');
+    const chip = g.querySelector('.slice-label');
+    if (!chip) return;
+    chip.style.cursor = 'pointer';
+    chip.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const link = document.querySelector(
+        '.sidebar a[data-file-key="' + CSS.escape(slug) + '"]'
+      );
+      if (link) link.click();
+    });
+  });
 }
 
 try {

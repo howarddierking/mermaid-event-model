@@ -1,6 +1,6 @@
-# Feed: Payment Submitted
+# Track Availability Horizon
 
-<!-- slice id: feed_payment_submitted -->
+<!-- slice id: track_availability_horizon -->
 
 ## Model
 
@@ -10,22 +10,34 @@
 
 ```mermaid
 eventModel
-	readModel paymentsToProcess["Payments to Process"] {
-		*paymentId: UUID
-		bookingId: UUID
-		amount: decimal
-		currency: string
-		paymentMethod: string
-		status: string
+	domainEvent roomAdded["Room Added"] {
+		*roomNumber: int
+		floor: int
+		roomType: string
+		capacity: int
 	}
-	domainEvent paymentSubmitted["Payment Submitted"] {
-		*paymentId: UUID
-		bookingId: UUID
-		amount: decimal
-		submittedAt: timestamp
+	externalEvent weekElapsed["Week Elapsed"] {
+		occurredAt: date
 	}
-	slice feed_payment_submitted["Feed: Payment Submitted"]
-		paymentSubmitted-->paymentsToProcess
+	readModel horizon["Availability Horizon"] {
+		*roomNumber: int
+		roomType: string
+		capacity: int
+		seededThrough: date
+		requiredThrough: date
+	}
+	domainEvent availabilityRolled["Availability Rolled"] {
+		*roomNumber: int
+		roomType: string
+		capacity: int
+		fromNight: date
+		throughNight: date
+		rolledAt: timestamp
+	}
+	slice track_availability_horizon["Track Availability Horizon"]
+		roomAdded-->horizon
+		weekElapsed-->horizon
+		availabilityRolled-->horizon
 ```
 
 ## Description
