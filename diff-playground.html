@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Event Model — Diff / Change Visualization</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 20px; max-width: 1600px; }
+  h1 { margin-top: 0; }
+  .cols { display: flex; gap: 16px; }
+  .cols > div { flex: 1; }
+  textarea { width: 100%; height: 320px; font-family: ui-monospace, monospace; font-size: 12px; }
+  label.field { font-weight: 600; font-size: 13px; display: block; margin: 8px 0 4px; }
+  #diagram { border: 1px solid #ddd; padding: 10px; overflow: auto; background: #fafafa; margin-top: 8px; }
+  #diagram svg { display: block; }
+  button { padding: 6px 14px; font-size: 14px; margin: 8px 0; }
+  .error { color: #b00; white-space: pre-wrap; font-family: ui-monospace, monospace; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin: 6px 0 2px; font-size: 13px; }
+  .legend .chip { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .sw { width: 16px; height: 14px; border-radius: 3px; border: 2px solid; display: inline-block; }
+  .sw.added { background: #bbf7d0; border-color: #15803d; }
+  .sw.removed { background: #fecaca; border-color: #b91c1c; }
+  .sw.modified { background: #fde68a; border-color: #b45309; }
+  .sw.unchanged { background: #fff; border-color: #cbd5e1; opacity: 0.6; }
+  .summary { font-size: 13px; color: #374151; margin: 6px 0; }
+  .summary b { font-variant-numeric: tabular-nums; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "d3": "https://cdn.jsdelivr.net/npm/d3@7/+esm"
+  }
+}
+</script>
+</head>
+<body>
+<h1>Event Model — Diff / Change Visualization</h1>
+<p>Paste two versions of an event model below. The diagram renders the union of both,
+colouring each element and edge by how it changed between versions. This page exercises
+the diff module (<code>event-model-diff.js</code>) directly, without Mermaid in the loop.</p>
+
+<div class="cols">
+  <div>
+    <label class="field" for="old">Old version</label>
+    <textarea id="old"></textarea>
+  </div>
+  <div>
+    <label class="field" for="new">New version</label>
+    <textarea id="new"></textarea>
+  </div>
+</div>
+
+<div><button id="render">Render diff</button></div>
+
+<div class="legend">
+  <span class="chip"><span class="sw added"></span>Added</span>
+  <span class="chip"><span class="sw removed"></span>Removed</span>
+  <span class="chip"><span class="sw modified"></span>Modified</span>
+  <span class="chip"><span class="sw unchanged"></span>Unchanged</span>
+</div>
+<div class="summary" id="summary"></div>
+
+<div id="diagram"></div>
+
+<script type="module">
+  import { renderModelDiff } from './event-model-diff.js';
+
+  // Two inlined variants of the same small model so the page works from file://
+  // without a server. The new version renames a command, drops a read model,
+  // and adds a cancellation flow.
+  const OLD_SRC = `eventModel
+\tactor Guest
+\taggregate Booking
+\tui:Guest booking_ui["Booking Screen"]
+\tcommand bookRoom["Book Room"]
+\tdomainEvent:Booking booked["Room Booked"]
+\treadModel avail["Availability"]
+
+\tbooking_ui-->bookRoom
+\tbookRoom-->booked
+\tbooked-->avail
+`;
+
+  const NEW_SRC = `eventModel
+\tactor Guest
+\taggregate Booking
+\tui:Guest booking_ui["Booking Screen"]
+\tcommand bookRoom["Reserve Room"]
+\tdomainEvent:Booking booked["Room Booked"]
+\tcommand cancelRoom["Cancel Room"]
+\tdomainEvent:Booking cancelled["Room Cancelled"]
+
+\tbooking_ui-->bookRoom
+\tbookRoom-->booked
+\tbooked-->cancelRoom
+\tcancelRoom-->cancelled
+`;
+
+  const oldTa = document.getElementById('old');
+  const newTa = document.getElementById('new');
+  const diagramEl = document.getElementById('diagram');
+  const summaryEl = document.getElementById('summary');
+  oldTa.value = OLD_SRC;
+  newTa.value = NEW_SRC;
+
+  function render() {
+    try {
+      const { diff } = renderModelDiff(oldTa.value, newTa.value, diagramEl);
+      const s = diff.summary;
+      summaryEl.innerHTML =
+        `<b>${s.added}</b> added · <b>${s.removed}</b> removed · ` +
+        `<b>${s.modified}</b> modified · <b>${s.unchanged}</b> unchanged ` +
+        `<span style="color:#9ca3af">(elements + edges)</span>`;
+    } catch (err) {
+      diagramEl.innerHTML = '<div class="error">' + String(err && err.stack || err) + '</div>';
+      summaryEl.textContent = '';
+    }
+  }
+  document.getElementById('render').onclick = render;
+  render();
+</script>
+</body>
+</html>
