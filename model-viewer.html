@@ -295,10 +295,23 @@ function attachCodegenPanel(container, src, sliceName) {
   // live, compilable infra/stacks/regional-stack.ts (VPC, DynamoDB ref,
   // Kinesis, ElastiCache Redis, Lambdas, API Gateway). Not shown on slices.
   const infraBtn = isModelView ? document.createElement('button') : null;
+  // Cost tier for the generated infra: production (Multi-AZ r7g.large Redis,
+  // 3 NAT) or minimal (single t4g.micro Redis, 1 NAT) for cheap demos.
+  const tierSel = isModelView ? document.createElement('select') : null;
   if (infraBtn) {
     infraBtn.type = 'button';
     infraBtn.className = 'primary';
     infraBtn.textContent = 'Generate AWS infra (CDK)';
+  }
+  if (tierSel) {
+    tierSel.title = 'Infra cost tier for the generated CDK';
+    tierSel.style.cssText = 'font:inherit;font-size:12px;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;background:#fff;color:#1f2937;';
+    for (const [val, label] of [['production', 'tier: production'], ['minimal', 'tier: minimal']]) {
+      const opt = document.createElement('option');
+      opt.value = val;
+      opt.textContent = label;
+      tierSel.appendChild(opt);
+    }
   }
 
   const copyBtn = document.createElement('button');
@@ -318,12 +331,13 @@ function attachCodegenPanel(container, src, sliceName) {
 
   bar.append(genBtn, awsBtn);
   if (infraBtn) bar.append(infraBtn);
+  if (tierSel) bar.append(tierSel);
   bar.append(copyBtn, dlBtn, manifestBtn);
 
   const output = document.createElement('pre');
   output.className = 'codegen-output empty';
   output.textContent = isModelView
-    ? 'Generate scaffolding from this model. “Generate AWS shared runtime” emits the COMMON runtime once (src/shared/event-store.ts) — the event-store envelope, the merged EventTypes map, and the DynamoDB/Kinesis/Redis helpers. “Generate AWS infra (CDK)” emits the shared stack (infra/stacks/regional-stack.ts) — VPC, DynamoDB, Kinesis, Redis, Lambdas, API Gateway. Open a slice to generate just its part.'
+    ? 'Generate scaffolding from this model. “Generate AWS shared runtime” emits the COMMON runtime once (src/shared/event-store.ts) — the event-store envelope, the merged EventTypes map, and the DynamoDB/Kinesis/Redis helpers. “Generate AWS infra (CDK)” emits the shared stack (infra/stacks/regional-stack.ts) — VPC, DynamoDB, Kinesis, Redis, Lambdas, API Gateway; pick the cost tier (production = Multi-AZ r7g.large; minimal = single t4g.micro for cheap demos). Open a slice to generate just its part.'
     : 'Generate Axon Framework 5 (Java) or AWS-native (CDK + Lambda, TypeScript) scaffolding from this slice — commands, events, a command handler (or projection/projector), and validation derived from the slice tests. The AWS output imports the model’s shared runtime instead of re-emitting it.';
 
   panel.append(bar, output);
@@ -377,7 +391,7 @@ function attachCodegenPanel(container, src, sliceName) {
   if (infraBtn) {
     infraBtn.addEventListener('click', () =>
       runGenerator(infraBtn, 'Regenerate AWS infra (CDK)',
-        () => generateAwsFromSource(src, { sliceName, part: 'infra' }), 'ts',
+        () => generateAwsFromSource(src, { sliceName, part: 'infra', tier: tierSel ? tierSel.value : 'production' }), 'ts',
         'regional-stack.ts'));
   }
 
