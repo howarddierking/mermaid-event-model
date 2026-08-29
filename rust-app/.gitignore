@@ -1,0 +1,13 @@
+# Rust build output
+/target/
+Cargo.lock
+
+# NOTE: src/main.rs IS committed (generated, but reviewable like aws-app's
+# handlers). Regenerate with `node emit.mjs`.
+
+# CDK / node
+cdk/node_modules/
+cdk/cdk.out/
+cdk/cdk.context.json
+cdk/app.js
+cdk/*.d.ts

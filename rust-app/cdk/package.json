@@ -1,0 +1,16 @@
+{
+  "name": "rust-register-cdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CDK app deploying the generated Rust register Lambda against the existing HotelEvents table.",
+  "devDependencies": {
+    "aws-cdk": "^2.150.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.0",
+    "@types/node": "^20.14.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0"
+  }
+}
