@@ -22,6 +22,7 @@
 //   - Reuses the existing parsers so the DSL keeps a single source of truth.
 
 import { parseEventModel } from "./event-model.js";
+import { generateRustMainFromCore } from "./codegen-rust.js";
 import { parseSliceTests } from "./slice-tests.js";
 
 const BASE_PACKAGE = "com.example.eventmodel";
@@ -97,6 +98,18 @@ function camel(s) {
 function constant(s) {
   return words(s).map((w) => w.toUpperCase()).join("_") || "TAG";
 }
+function kebab(s) {
+  return words(s).map((w) => w.toLowerCase()).join("-") || "app";
+}
+
+// Resource naming for the AWS target, derived from the model's namespace so
+// generated stacks are named after the model — not any sibling project.
+//   resourcePrefix  → lower-kebab, used in physical names (streams, functions)
+//   ResourcePrefix  → PascalCase, used in a human-facing API name
+//   apiPath         → plural lower-kebab path segment for the REST resource
+const resourcePrefix = kebab(EVENT_NAMESPACE);
+const ResourcePrefix = pascal(EVENT_NAMESPACE);
+const apiPath = "records";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Emit buffer with indentation.
@@ -855,17 +868,28 @@ function buildManifest({ model, tests, sliceName, decidedExclusions, patternHint
   const slice = (model.slices && model.slices[0] && model.slices[0].id) || sliceName || "slice";
   const pattern = slicePattern(parts, patternHint);
 
-  // command core (first command, if any)
+  // command core (first command, if any). Fields now carry types + axis flags,
+  // so the core is a self-sufficient blueprint any binding can generate from.
   const cmd = parts.command[0] || null;
   const commandCore = cmd
-    ? { name: typeNameFor(cmd), fields: (cmd.fields || []).map((f) => f.name) }
+    ? {
+        id: cmd.id,
+        name: typeNameFor(cmd),
+        fields: (cmd.fields || []).map((f) => ({ name: f.name, type: f.type, axis: !!f.axis })),
+      }
     : null;
 
-  // boundary: union of reads + the axes used
+  // boundary: the flat union (tags + reads, for the human-readable contract and
+  // the diff acceptance test) plus the explicit branch structure a generator
+  // needs to emit an OR-of-branches consistency boundary.
   const boundary = cmd
     ? {
         tags: axesOf(cmd),
         reads: (cmd.reads || []).map((id) => storedName(id)),
+        branches: (cmd.readBranches || []).map((b) => ({
+          events: (b.events || []).map((id) => ({ id, storedAs: storedName(id) })),
+          axes: b.axes || [],
+        })),
       }
     : null;
 
@@ -877,6 +901,39 @@ function buildManifest({ model, tests, sliceName, decidedExclusions, patternHint
   ).map((id) => ({ name: pascal(id), storedAs: storedName(id) }));
 
   const unmapped = detectUnmapped(parts, producedByCommand, decidedExclusions);
+
+  // The self-contained blueprint: everything a generator needs to emit ANY
+  // binding, all stack-independent. `coreToModel`/`coreToTests` reconstruct a
+  // parsed-model-equivalent from this, so generateAwsFromCore /
+  // generateAxonFromCore never re-parse the DSL. Fields keep types + axis
+  // flags; events keep their lane; tests keep example values and error codes.
+  const fieldsOf = (el) =>
+    (el.fields || []).map((f) => ({ name: f.name, type: f.type, axis: !!f.axis }));
+  const blueprint = {
+    elements: model.elements.map((el) => ({
+      id: el.id,
+      kind: el.kind,
+      lane: el.lane ?? null,
+      label: el.label,
+      fields: fieldsOf(el),
+      reads: el.reads || [],
+      readBranches: (el.readBranches || []).map((b) => ({
+        events: b.events || [],
+        axes: b.axes || [],
+      })),
+    })),
+    edges: model.edges.map((e) => ({ from: e.from, to: e.to })),
+    slices: (model.slices || []).map((s) => ({
+      id: s.id,
+      label: s.label,
+      edges: (s.edges || []).map((e) => ({ from: e.from, to: e.to })),
+      nodeIds: s.nodeIds || [],
+    })),
+    tests: (tests.tests || []).map((t) => ({
+      title: t.title,
+      given: t.given, when: t.when, then: t.then,
+    })),
+  };
 
   // binding (disposable) — symbols per element, test method references
   const symbols = {};
@@ -897,6 +954,8 @@ function buildManifest({ model, tests, sliceName, decidedExclusions, patternHint
     emits: emitList,
     unmapped,
     ...(decidedExclusions && decidedExclusions.length ? { decidedExclusions } : {}),
+    // The reconstructable model + tests — the generator's actual input.
+    blueprint,
     // ---- binding: discarded and regenerated on a rebind ----
     binding: {
       stack: "java-25/axon-5/dcb",
@@ -1048,6 +1107,355 @@ export function generateManifestFromSource(src, opts = {}) {
   return JSON.stringify(manifest, null, 2) + "\n";
 }
 
+/**
+ * The blueprint artifact: the manifest CORE only — the stack-independent
+ * contract that must survive a change of architecture unchanged (slice,
+ * pattern, command, boundary, emitted event stored-names, unmapped fields,
+ * decided exclusions). The disposable `binding` section is deliberately
+ * omitted: it belongs to a specific stack and is produced only when code is
+ * generated. This is what the authoring UI emits BEFORE (and instead of) code
+ * — code generation is a downstream step that consumes the blueprint.
+ * @param {string} src  slice spec markdown or raw DSL
+ * @param {object} [opts]
+ * @param {string} [opts.sliceName]
+ * @returns {string} pretty-printed JSON (the manifest core)
+ */
+export function generateManifestCoreFromSource(src, opts = {}) {
+  const model = parseEventModel(src);
+  const tests = parseSliceTests(src);
+  const decidedExclusions = parseDecidedExclusions(src);
+  const { binding, ...core } = buildManifest({
+    model,
+    tests,
+    sliceName: opts.sliceName,
+    decidedExclusions,
+  });
+  return JSON.stringify(core, null, 2) + "\n";
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Slice-spec generation — the BLUEPRINT (Model · Intent · Tests) markdown.
+//
+// This is the `spec-slices` step of the reentrant lifecycle, ported to JS so
+// the viewer can produce the slice spec (register.md-shaped) rather than the
+// downstream manifest core. It stamps the ## Model section from the parent
+// model (a self-contained eventModel snippet of just this slice) and scaffolds
+// Description / Tests. Model is derived; Description/Tests are user-owned.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Slugify a slice label the way spec-slices names files: lowercase, runs of
+// non-alphanumerics → single '-', trimmed.
+function sliceSlug(label) {
+  return String(label || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+// Re-emit an element's DSL declaration line (kind[:lane] id["Label"] [reads ...])
+// plus its brace-delimited data section, verbatim-equivalent to the parent.
+function elementDslLines(el) {
+  const laneQual = el.lane ? `:${el.lane}` : "";
+  const label = el.label && el.label !== el.id ? `["${el.label}"]` : "";
+  const head = `\t${el.kind}${laneQual} ${el.id}${label}`;
+  const lines = [];
+  const hasFields = el.fields && el.fields.length;
+  if (hasFields) {
+    lines.push(`${head} {`);
+    for (const f of el.fields) lines.push(`\t\t${f.axis ? "*" : ""}${f.name}: ${f.type}`);
+    lines.push("\t}");
+  } else {
+    lines.push(head);
+  }
+  // Structured reads branches (reads [...] by axis), one indented line each.
+  for (const b of el.readBranches || []) {
+    const evs = (b.events || []).join(", ");
+    const by = (b.axes && b.axes.length) ? ` by ${b.axes.join(", ")}` : "";
+    lines.push(`\t\treads [${evs}]${by}`);
+  }
+  return lines;
+}
+
+// Build the tab-indented eventModel body for one slice — a self-contained
+// snippet of just this slice's nodes + edges, mirroring the spec-slices skill.
+function buildSliceModelBody(model, slice) {
+  const elById = new Map(model.elements.map((e) => [e.id, e]));
+  const memberIds = new Set(slice.nodeIds || []);
+  const members = [...memberIds].map((id) => elById.get(id)).filter(Boolean);
+
+  // Referenced actors (ui:/automation: lanes) and aggregates (domainEvent:
+  // lanes), in the parent's declaration order.
+  const referencedActors = new Set();
+  const referencedAggs = new Set();
+  for (const el of members) {
+    if ((el.kind === "ui" || el.kind === "automation") && el.lane) referencedActors.add(el.lane);
+    if (el.kind === "domainEvent" && el.lane) referencedAggs.add(el.lane);
+  }
+  const actors = model.actors.filter((a) => referencedActors.has(a));
+  const aggregates = model.aggregates.filter((a) => referencedAggs.has(a));
+
+  const lines = [];
+  for (const a of actors) lines.push(`\tactor ${a}`);
+  for (const a of aggregates) lines.push(`\taggregate ${a}`);
+  // Elements in the parent's declaration order (stable, matches the skill).
+  for (const el of model.elements) {
+    if (memberIds.has(el.id)) lines.push(...elementDslLines(el));
+  }
+  const label = slice.label && slice.label !== slice.id ? `["${slice.label}"]` : "";
+  lines.push(`\tslice ${slice.id}${label}`);
+  for (const e of slice.edges || []) lines.push(`\t\t${e.from}-->${e.to}`);
+  return lines.join("\n");
+}
+
+// Classify a slice into one of the four canonical patterns from its own edges
+// (the spec-slices / add-slices decision table). externalEvent is the sole
+// discriminator between Automation and Translation.
+function classifySlicePattern(model, slice) {
+  const elById = new Map(model.elements.map((e) => [e.id, e]));
+  const kindOf = (id) => (elById.get(id) ? elById.get(id).kind : null);
+  const edges = slice.edges || [];
+  const has = (fromKind, toKind) =>
+    edges.some((e) => kindOf(e.from) === fromKind && kindOf(e.to) === toKind);
+  const memberKinds = new Set((slice.nodeIds || []).map(kindOf));
+
+  const hasReadToAuto = has("readModel", "automation");
+  const hasAutoToCmd = has("automation", "command");
+  const readSideEvents = edges
+    .filter((e) => kindOf(e.to) === "readModel")
+    .map((e) => kindOf(e.from));
+  const anyExternalOnReadSide = readSideEvents.includes("externalEvent");
+
+  if (hasReadToAuto && hasAutoToCmd) {
+    return anyExternalOnReadSide ? "Translation" : "Automation";
+  }
+  if (memberKinds.has("command")) {
+    if (has("ui", "command")) return "Command";
+    if (has("externalEvent", "command")) return "Translation [abbreviated]";
+    if (has("domainEvent", "command")) return "Automation [abbreviated]";
+    return "Command";
+  }
+  if (memberKinds.has("readModel")) return "View";
+  return "Unclassified";
+}
+
+// The slice-spec scaffold (mirrors skills/spec-slices/template.md). Model is
+// derived and filled here; Description and Tests are placeholder prompts the
+// user owns.
+function sliceSpecTemplate({ title, id, pattern, modelBody }) {
+  return `# ${title}
+
+<!-- slice id: ${id} -->
+
+## Model
+
+<!-- Derived from the parent eventModel and refreshed on every spec-slices run. Do not hand-edit. -->
+
+**Pattern:** ${pattern}
+
+\`\`\`mermaid
+eventModel
+${modelBody}
+\`\`\`
+
+## Description
+
+_Describe the high-level intent of this slice in prose. What user-visible capability does it represent? Why does it matter? When does it run, and what constraint or invariant does it preserve?_
+
+## Tests
+
+\`\`\`mermaid
+sliceTests
+\ttest["Describe what this test verifies"]
+\t\tgiven
+\t\t\t# Preconditions: events that have already occurred,
+\t\t\t# read models that must be present.
+\t\twhen
+\t\t\t# The command (or signal) under test. Omit \`when\`
+\t\t\t# for state-view tests that only project a read model.
+\t\tthen
+\t\t\t# Expected outcomes: emitted events, populated read
+\t\t\t# models, signals to external systems. For rejection
+\t\t\t# scenarios use \`error["<message>"]\` — the message is
+\t\t\t# read verbatim by code generation.
+\t# Data-section fields may carry example values to demonstrate the
+\t# case and seed code-gen fixtures, e.g. { checkIn: date = 2026-08-12 }.
+\`\`\`
+`;
+}
+
+/**
+ * Generate the slice-spec BLUEPRINT markdown (Model · Intent · Tests) for one
+ * slice, stamped from the parent model. The Model section is derived; the
+ * Description and Tests are the template scaffold for the author to fill.
+ *
+ * @param {string} modelSrc  the parent model markdown/DSL (contains slices)
+ * @param {object} [opts]
+ * @param {string} [opts.sliceId]  which slice to stamp; defaults to the first
+ * @returns {string} slice-spec markdown
+ */
+export function generateSliceSpecFromModel(modelSrc, opts = {}) {
+  const model = parseEventModel(modelSrc);
+  if (!model.slices || model.slices.length === 0) {
+    throw new Error("the model declares no slices — nothing to stamp a spec from");
+  }
+  const slice = opts.sliceId
+    ? model.slices.find((s) => s.id === opts.sliceId)
+    : model.slices[0];
+  if (!slice) throw new Error(`slice '${opts.sliceId}' not found in the model`);
+
+  return sliceSpecTemplate({
+    title: slice.label || slice.id,
+    id: slice.id,
+    pattern: classifySlicePattern(model, slice),
+    modelBody: buildSliceModelBody(model, slice),
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Core-driven generation — the manifest core IS the generator's input.
+//
+// The enriched core carries a self-contained `blueprint` (elements, edges,
+// slices, tests). These adapters reconstruct a parsed-model-equivalent from it
+// so the existing generators run unchanged — the same core drives either
+// binding, which is the whole point: choose the stack at generation time, not
+// at authoring time.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Accept the core as a JSON string or an already-parsed object.
+function asCore(coreOrJson) {
+  const core = typeof coreOrJson === "string" ? JSON.parse(coreOrJson) : coreOrJson;
+  if (!core || !core.blueprint) {
+    throw new Error(
+      "manifest core has no `blueprint` section — regenerate it with the current generator " +
+      "(generateManifestCoreFromSource); older cores are not self-sufficient for code generation."
+    );
+  }
+  return core;
+}
+
+// Rebuild the parseEventModel-shaped model from a core's blueprint.
+function coreToModel(core) {
+  const bp = core.blueprint;
+  return {
+    actors: [],       // layout-only; codegen does not read these
+    aggregates: [],
+    elements: bp.elements.map((el) => ({
+      id: el.id,
+      kind: el.kind,
+      lane: el.lane ?? null,
+      label: el.label,
+      fields: (el.fields || []).map((f) => ({ name: f.name, type: f.type, axis: !!f.axis })),
+      reads: el.reads || [],
+      readBranches: (el.readBranches || []).map((b) => ({
+        events: b.events || [],
+        axes: b.axes || [],
+      })),
+    })),
+    edges: (bp.edges || []).map((e) => ({ from: e.from, to: e.to })),
+    slices: (bp.slices || []).map((s) => ({
+      id: s.id,
+      label: s.label,
+      edges: (s.edges || []).map((e) => ({ from: e.from, to: e.to })),
+      nodeIds: s.nodeIds || [],
+    })),
+  };
+}
+
+// Rebuild the parseSliceTests-shaped tests object from a core's blueprint.
+function coreToTests(core) {
+  return {
+    tests: (core.blueprint.tests || []).map((t) => ({
+      title: t.title || "",
+      given: t.given || [],
+      when: t.when || [],
+      then: t.then || [],
+    })),
+  };
+}
+
+// Decided exclusions are a core-level list; reuse them for unmapped reconciliation.
+function coreDecidedExclusions(core) {
+  return core.decidedExclusions || [];
+}
+
+/**
+ * Generate the AWS-native (CDK + Lambda, TypeScript) binding from a manifest
+ * core. The core is the sole input — no DSL, no slice spec.
+ * @param {string|object} coreOrJson  a manifest core (JSON string or object)
+ * @param {object} [opts]
+ * @param {string} [opts.sliceName]
+ * @param {('slice'|'runtime'|'infra')} [opts.part]
+ * @param {('production'|'minimal')} [opts.tier]
+ * @returns {string} TypeScript source
+ */
+export function generateAwsFromCore(coreOrJson, opts = {}) {
+  const core = asCore(coreOrJson);
+  return generateAwsNative({
+    model: coreToModel(core),
+    tests: coreToTests(core),
+    sliceName: opts.sliceName || core.slice,
+    decidedExclusions: coreDecidedExclusions(core),
+    part: opts.part || "slice",
+    tier: opts.tier || "production",
+  });
+}
+
+/**
+ * Generate the Axon Framework 5 (Java, DCB) binding from a manifest core.
+ * @param {string|object} coreOrJson  a manifest core (JSON string or object)
+ * @param {object} [opts]
+ * @param {string} [opts.sliceName]
+ * @returns {string} Java source
+ */
+export function generateAxonFromCore(coreOrJson, opts = {}) {
+  const core = asCore(coreOrJson);
+  return generateJava({
+    model: coreToModel(core),
+    tests: coreToTests(core),
+    sliceName: opts.sliceName || core.slice,
+    decidedExclusions: coreDecidedExclusions(core),
+  });
+}
+
+/**
+ * Generate a binding from a manifest core, selecting the target stack.
+ * @param {string|object} coreOrJson
+ * @param {('aws'|'axon')} target
+ * @param {object} [opts]  forwarded to the per-target generator
+ * @returns {string} source in the target language
+ */
+export function generateFromCore(coreOrJson, target, opts = {}) {
+  switch (target) {
+    case "aws":  return generateAwsFromCore(coreOrJson, opts);
+    case "axon": return generateAxonFromCore(coreOrJson, opts);
+    case "rust": return generateRustFromCore(coreOrJson, opts);
+    default:
+      throw new Error(`unknown target '${target}' — expected 'aws', 'axon', or 'rust'`);
+  }
+}
+
+/**
+ * Generate the Rust AWS-native binding (a single Lambda main.rs) from a
+ * manifest core. Command slices only.
+ * @param {string|object} coreOrJson  a manifest core (JSON string or object)
+ * @param {object} [opts]
+ * @param {string} [opts.sliceName]
+ * @returns {string} Rust source (main.rs)
+ */
+export function generateRustFromCore(coreOrJson, opts = {}) {
+  const core = asCore(coreOrJson);
+  return generateRustMainFromCore(core, { sliceName: opts.sliceName || core.slice });
+}
+
+/**
+ * Convenience: generate the Rust binding directly from a slice `.md` (or raw
+ * DSL) string, by first building the enriched manifest core.
+ * @param {string} src
+ * @param {object} [opts]
+ * @returns {string} Rust source (main.rs)
+ */
+export function generateRustFromSource(src, opts = {}) {
+  const core = JSON.parse(generateManifestCoreFromSource(src, { sliceName: opts.sliceName }));
+  return generateRustMainFromCore(core, { sliceName: opts.sliceName || core.slice });
+}
+
 // ═════════════════════════════════════════════════════════════════════════
 // AWS-native target — TypeScript CDK + Lambda handlers.
 //
@@ -1135,6 +1543,13 @@ function producedByCommandMap(model, parts) {
     if (produced.has(e.from) && eventIds.has(e.to)) produced.get(e.from).push(e.to);
   }
   return produced;
+}
+
+// Unique projector handler name for an (event, read model) pair, e.g.
+// onOccupancyForecastedIntoDemandForecast — so a projector serving many read
+// models never collides on a shared source event.
+function projFnName(evId, rm) {
+  return `on${pascal(evId)}Into${pascal(rm.id)}`;
 }
 
 // Source events feeding a read model (edges: event -> readModel).
@@ -1428,6 +1843,15 @@ function genAwsCommandHandler(out, parts, model) {
   if (cmds.length === 0) return false;
   const producedByCommand = producedByCommandMap(model, parts);
   const MAX_RETRIES = 5;
+  // A command is automation-driven — and so calls a SageMaker endpoint for
+  // inference — only when an `automation --> <command>` edge targets it. This
+  // is per-command, not per-file: a consolidated handler holds many commands,
+  // and only the ones fed by an automation get the inference step (a plain
+  // Command slice like check-in must not).
+  const automationIds = new Set(parts.automation.map((a) => a.id));
+  const automationDrivenCmdIds = new Set(
+    model.edges.filter((e) => automationIds.has(e.from)).map((e) => e.to)
+  );
 
   out.line("// ── Command Lambda (write side, DCB-enforced) ───────────────────────");
   out.line("// API Gateway → this handler. Each command's `reads [types] by [axes]`");
@@ -1453,10 +1877,40 @@ function genAwsCommandHandler(out, parts, model) {
   out.push();
   out.line("if (event.httpMethod !== 'POST') return response(405, { error: 'Method not allowed' });");
   out.line("const body = event.body ? JSON.parse(event.body) : {};");
-  cmds.forEach((cmd) => {
-    out.line(`// Route: handle ${tsStr(cmd.label)}`);
+  if (cmds.length === 1) {
+    // Single command: no discriminator needed.
+    const cmd = cmds[0];
+    out.line(`// Only one command in this slice.`);
     out.line(`return handle${typeNameFor(cmd)}(event, body);`);
-  });
+  } else {
+    // Multiple commands: dispatch on a `command` discriminator in the request
+    // body (or the `command` path parameter), matched against each command id.
+    out.line("// Dispatch on the `command` discriminator (body.command or path).");
+    out.line("const command = String(");
+    out.push();
+    out.line("(body as { command?: unknown }).command ?? event.pathParameters?.command ?? ''");
+    out.pop();
+    out.line(");");
+    out.line("switch (command) {");
+    out.push();
+    cmds.forEach((cmd) => {
+      out.line(`case ${tsStr(cmd.id)}:`);
+      out.push();
+      out.line(`return handle${typeNameFor(cmd)}(event, body);`);
+      out.pop();
+    });
+    out.line("default:");
+    out.push();
+    out.line("return response(400, {");
+    out.push();
+    out.line("error: `Unknown or missing command: '${command}'`,");
+    out.line(`commands: [${cmds.map((c) => tsStr(c.id)).join(", ")}],`);
+    out.pop();
+    out.line("});");
+    out.pop();
+    out.pop();
+    out.line("}");
+  }
   out.pop();
   out.line("} catch (err) {");
   out.push();
@@ -1472,6 +1926,8 @@ function genAwsCommandHandler(out, parts, model) {
 
   cmds.forEach((cmd) => {
     const cmdType = typeNameFor(cmd);
+    // This command is automation-driven only if an automation edge targets it.
+    const isAutomation = automationDrivenCmdIds.has(cmd.id);
     const produced = producedByCommand.get(cmd.id) || [];
     const emitted = produced.length ? produced : parts.domainEvent.map((e) => e.id);
     const firstEvent = emitted[0] || null;
@@ -1513,24 +1969,98 @@ function genAwsCommandHandler(out, parts, model) {
     }
     out.blank();
 
-    // Build the tags object the produced event carries.
-    const emitTagsObject = () => {
+    // Build the tags object the produced event carries. An axis the command
+    // itself supplies comes from the resolved local; an axis the command does
+    // NOT carry (e.g. `email` on CheckedIn, which originates on the prior
+    // `booked` event) is sourced from the rehydrated boundary `state` when a
+    // boundary exists, falling back to the local. Empty values are dropped so
+    // no empty tag_<axis> GSI key is ever written (DynamoDB rejects those).
+    const cmdAxisFieldNames = new Set((cmd.fields || []).map((f) => f.name));
+    const emitTagsObject = (hasState) => {
       if (eventAxisFields.length === 0) { out.line("const tags: Record<string, string> = {};"); return; }
-      out.line("const tags: Record<string, string> = {");
+      out.line("const tagsRaw: Record<string, string> = {");
       out.push();
-      for (const f of eventAxisFields) out.line(`${camel(f.name)}: ${camel(f.name)},`);
+      for (const f of eventAxisFields) {
+        const local = camel(f.name);
+        let expr;
+        if (cmdAxisFieldNames.has(f.name)) {
+          expr = local; // the command supplies this axis
+        } else if (hasState) {
+          // Not on the command — take it from the folded boundary state.
+          expr = `${local} || (state.${local} == null ? '' : String(state.${local}))`;
+        } else {
+          expr = local;
+        }
+        out.line(`${local}: ${expr},`);
+      }
       out.pop();
       out.line("};");
+      // Drop empty tag values: an unset axis must not become an empty GSI key.
+      out.line("const tags: Record<string, string> = Object.fromEntries(");
+      out.push();
+      out.line("Object.entries(tagsRaw).filter(([, v]) => v !== undefined && v !== '')");
+      out.pop();
+      out.line(");");
     };
 
-    // Build the payload object from the produced event's non-axis fields.
+    // Fields the emitted event carries that neither the command supplies nor a
+    // tag axis provides — for an automation slice these are the prediction the
+    // model returns (recorded as decided exclusions in the slice spec).
+    const cmdFieldNamesForSm = new Set((cmd.fields || []).map((f) => f.name));
+    const inferredFields = ((ev && ev.fields) || []).filter(
+      (f) => !f.axis && !cmdFieldNamesForSm.has(f.name)
+    );
+
+    // For an automation slice, invoke the SageMaker endpoint and destructure
+    // the inferred fields off its response so the payload builder can use them.
+    // `hasState` is true on the boundary path (a `rehydrate(events)` state is in
+    // scope) — its read-model-derived fields are the real feature inputs, so we
+    // spread it first and let explicit command fields override on collision.
+    const emitSageMakerCall = (hasState) => {
+      if (!isAutomation) return;
+      out.blank();
+      out.line("// ── Inference: call the SageMaker endpoint for this slice ──────────");
+      out.line("// Feature vector for the model, in precedence order (later overrides");
+      out.line("// earlier): the request body (the demand snapshot the caller/scheduler");
+      out.line("// supplies), the rehydrated boundary state, then the typed command");
+      out.line("// fields. Adjust the shape to match your endpoint's contract.");
+      out.line("const features: Record<string, unknown> = {");
+      out.push();
+      out.line("...body,");
+      if (hasState) out.line("...(state as unknown as Record<string, unknown>),");
+      for (const f of cmd.fields || []) out.line(`${camel(f.name)}: ${camel(f.name)},`);
+      out.pop();
+      out.line("};");
+      if (inferredFields.length) {
+        out.line("// Prediction returned by the endpoint (the event's inferred fields).");
+        out.line("const prediction = await invokeSageMaker<{");
+        out.push();
+        for (const f of inferredFields) out.line(`${camel(f.name)}?: ${tsType(f.type)};`);
+        out.pop();
+        out.line("}>(features);");
+      } else {
+        out.line("const prediction = await invokeSageMaker(features);");
+      }
+      out.blank();
+    };
+
+    // Build the payload object from the produced event's non-axis fields. On an
+    // automation slice, inferred fields are sourced from the SageMaker response.
     const emitPayloadObject = () => {
       out.line("const payload: Record<string, unknown> = {");
       out.push();
       const cmdFieldNames = new Set((cmd.fields || []).map((f) => f.name));
+      const inferredNames = new Set(inferredFields.map((f) => f.name));
       for (const f of (ev && ev.fields) || []) {
         if (f.axis) continue;
-        const src = cmdFieldNames.has(f.name) ? camel(f.name) : `body.${camel(f.name)}`;
+        let src;
+        if (isAutomation && inferredNames.has(f.name)) {
+          src = `prediction.${camel(f.name)}`;
+        } else if (cmdFieldNames.has(f.name)) {
+          src = camel(f.name);
+        } else {
+          src = `body.${camel(f.name)}`;
+        }
         out.line(`${camel(f.name)}: ${src},`);
       }
       out.pop();
@@ -1541,7 +2071,8 @@ function genAwsCommandHandler(out, parts, model) {
       // No boundary to read: this command is unconditional (a creation). Still
       // written through appendWithinBoundary (with no guards) for a uniform path.
       out.line("// Creation command — no `reads`, so the boundary is empty (no guards).");
-      emitTagsObject();
+      emitTagsObject(false);
+      emitSageMakerCall(false);
       emitPayloadObject();
       if (ev) {
         out.line(`const domainEvent = createEvent(EventTypes.${eventTypeKey(ev)}, tags, payload);`);
@@ -1588,7 +2119,8 @@ function genAwsCommandHandler(out, parts, model) {
       out.line(`const validationError = validateCommand(state, ${tsStr(cmdType)});`);
       out.line("if (validationError) return response(409, { error: validationError });");
       out.blank();
-      emitTagsObject();
+      emitTagsObject(true);
+      emitSageMakerCall(true);
       emitPayloadObject();
       if (ev) {
         out.line(`const domainEvent = createEvent(EventTypes.${eventTypeKey(ev)}, tags, payload);`);
@@ -1630,10 +2162,35 @@ function genAwsProjection(out, parts, model) {
   if (parts.command.length > 0) return false;
   const readModels = parts.readModel;
   if (readModels.length === 0) return false;
-  const rm = readModels[0];
-  const sources = sourceEventsFor(model, parts, rm.id);
   const knownEvents = new Map([...parts.domainEvent, ...parts.externalEvent].map((e) => [e.id, e]));
-  const view = typeNameFor(rm);
+
+  // A projector may serve MANY read models (when generated from the whole
+  // model). Build, per read model, its source events and its Redis key info.
+  // The dispatch maps each source event to every (read model) it feeds, so one
+  // streamed event can update multiple read models; unrelated events are
+  // ignored gracefully.
+  const rmInfos = readModels.map((rm) => {
+    const keyField = (rm.fields || []).find((f) => f.axis) || (rm.fields || [])[0];
+    return {
+      rm,
+      view: typeNameFor(rm),
+      prefix: camel(rm.id),
+      keyName: keyField ? camel(keyField.name) : "id",
+      sources: sourceEventsFor(model, parts, rm.id),
+    };
+  });
+  // event id -> [rmInfo, ...]
+  const dispatch = new Map();
+  for (const info of rmInfos) {
+    for (const evId of info.sources) {
+      if (!dispatch.has(evId)) dispatch.set(evId, []);
+      dispatch.get(evId).push(info);
+    }
+  }
+  // The primary read model backs the query handler / stack query entry.
+  const rm = readModels[0];
+  const sources = [...dispatch.keys()];
+  const view = rmInfos[0].view;
 
   // ── Projector: DynamoDB Streams → Redis read model.
   out.line("// ── Projector Lambda (read side) — DynamoDB Streams → Redis ─────────");
@@ -1647,7 +2204,7 @@ function genAwsProjection(out, parts, model) {
   out.line("import Redis from 'ioredis';");
   out.blank();
 
-  const keyPrefix = camel(rm.id);
+  const keyPrefix = rmInfos[0].prefix;
   out.line("export async function handler(event: DynamoDBStreamEvent): Promise<void> {");
   out.push();
   out.line("const client = getRedis();");
@@ -1661,34 +2218,31 @@ function genAwsProjection(out, parts, model) {
   out.line("}");
   out.blank();
 
-  // The read model's identity field (its *-axis field, or first field) is the
-  // key of each Redis record; its value is read from the event's tags (axis
-  // values live in `tags`), falling back to the event id.
-  const rmKeyField = (rm.fields || []).find((f) => f.axis) || (rm.fields || [])[0];
-  const rmKeyName = rmKeyField ? camel(rmKeyField.name) : "id";
-
   out.line("async function processRecord(client: Redis, record: DynamoDBRecord): Promise<void> {");
   out.push();
   out.line("if (!record.dynamodb?.NewImage) return;");
   out.line("const item = unmarshall(record.dynamodb.NewImage as Record<string, AttributeValue>) as DomainEvent;");
   out.line("const { eventId, eventType, timestamp, tags, payload } = item;");
-  out.line(`// The record key: the read model's identity from the event tags, else the eventId.`);
-  out.line(`const recordKey = tags[${tsStr(rmKeyName)}] ?? eventId;`);
   out.line("switch (eventType) {");
   out.push();
   if (sources.length === 0) {
-    out.line("// TODO: no source events wired to this read model in the slice edges.");
+    out.line("// TODO: no source events wired to any read model in the model edges.");
   }
   for (const evId of sources) {
     out.line(`case EventTypes.${eventTypeKey(evId)}:`);
     out.push();
-    out.line(`await on${pascal(evId)}(client, recordKey, timestamp, tags, payload);`);
+    // One streamed event may feed several read models — invoke each.
+    for (const info of dispatch.get(evId)) {
+      const recKey = `tags[${tsStr(info.keyName)}] ?? eventId`;
+      out.line(`await ${projFnName(evId, info.rm)}(client, ${recKey}, timestamp, tags, payload);`);
+    }
     out.line("break;");
     out.pop();
   }
   out.line("default:");
   out.push();
-  out.line("console.warn(`Unknown event type: ${eventType}`);");
+  out.line("// Event not consumed by any read model in this model — ignore.");
+  out.line("break;");
   out.pop();
   out.pop();
   out.line("}");
@@ -1696,44 +2250,53 @@ function genAwsProjection(out, parts, model) {
   out.line("}");
   out.blank();
 
-  // One handler function per source event: write/merge the read-model record.
-  for (const evId of sources) {
-    const ev = knownEvents.get(evId);
-    out.line(`async function on${pascal(evId)}(`);
-    out.push();
-    out.line("client: Redis,");
-    out.line("recordKey: string,");
-    out.line("timestamp: string,");
-    out.line("tags: Record<string, string>,");
-    out.line("payload: Record<string, unknown>");
-    out.pop();
-    out.line("): Promise<void> {");
-    out.push();
-    out.line(`// Merge ${tsStr(ev ? ev.label : evId)} into the ${view} record.`);
-    out.line(`const existing = await client.get(\`${keyPrefix}:\${recordKey}\`);`);
-    out.line(`const view: Record<string, unknown> = existing ? JSON.parse(existing) : { ${rmKeyName}: recordKey };`);
-    for (const f of (ev && ev.fields) || []) {
-      // Axis values come from tags; plain fields from payload.
-      if (f.axis) {
-        out.line(`view.${camel(f.name)} = tags.${camel(f.name)};`);
-      } else {
-        out.line(`view.${camel(f.name)} = payload.${camel(f.name)};`);
+  // One handler function per (source event, read model) pair.
+  for (const info of rmInfos) {
+    for (const evId of info.sources) {
+      const ev = knownEvents.get(evId);
+      out.line(`async function ${projFnName(evId, info.rm)}(`);
+      out.push();
+      out.line("client: Redis,");
+      out.line("recordKey: string,");
+      out.line("timestamp: string,");
+      out.line("tags: Record<string, string>,");
+      out.line("payload: Record<string, unknown>");
+      out.pop();
+      out.line("): Promise<void> {");
+      out.push();
+      out.line(`// Merge ${tsStr(ev ? ev.label : evId)} into the ${info.view} record.`);
+      out.line(`const existing = await client.get(\`${info.prefix}:\${recordKey}\`);`);
+      out.line(`const view: Record<string, unknown> = existing ? JSON.parse(existing) : { ${info.keyName}: recordKey };`);
+      for (const f of (ev && ev.fields) || []) {
+        if (f.axis) {
+          out.line(`if (tags.${camel(f.name)} !== undefined) view.${camel(f.name)} = tags.${camel(f.name)};`);
+        } else {
+          out.line(`if (payload.${camel(f.name)} !== undefined) view.${camel(f.name)} = payload.${camel(f.name)};`);
+        }
       }
+      out.line(`const pipeline = client.pipeline();`);
+      out.line(`pipeline.set(\`${info.prefix}:\${recordKey}\`, JSON.stringify(view));`);
+      out.line(`pipeline.zadd('${info.prefix}:all', Date.parse(timestamp).toString(), recordKey);`);
+      out.line("await pipeline.exec();");
+      out.pop();
+      out.line("}");
+      out.blank();
     }
-    out.line("// TODO: set view.status to the status this event transitions to.");
-    out.line(`const pipeline = client.pipeline();`);
-    out.line(`pipeline.set(\`${keyPrefix}:\${recordKey}\`, JSON.stringify(view));`);
-    out.line(`pipeline.zadd('${keyPrefix}:all', Date.parse(timestamp).toString(), recordKey);`);
-    out.line("await pipeline.exec();");
-    out.pop();
-    out.line("}");
-    out.blank();
   }
 
-  // ── Query Lambda snippet (read the Redis read model behind a GET route).
-  out.line("// ── Query Lambda (read side) — serves GET from the Redis read model ──");
-  out.line("// Reads the projection only; never touches the event store. This is the");
-  out.line("// query half of CQRS (e.g. GET /api/" + keyPrefix + "/{id}).");
+  // ── Query Lambda snippet (read any read model behind a GET route).
+  out.line("// ── Query Lambda (read side) — serves GET from the Redis read models ─");
+  out.line("// Reads the projection only; never touches the event store. Selects the");
+  out.line("// read model via the `view` query-string param (defaults to the first);");
+  out.line("// `GET /api/records?view=demandForecast&id=standard` reads one record,");
+  out.line("// omitting `id` lists the most recent. Unknown views return 400.");
+  out.line("const READ_MODELS: Record<string, string> = {");
+  out.push();
+  for (const info of rmInfos) out.line(`${tsStr(info.prefix)}: ${tsStr(info.prefix)},`);
+  out.pop();
+  out.line("};");
+  out.line(`const DEFAULT_VIEW = ${tsStr(rmInfos[0].prefix)};`);
+  out.blank();
   out.line("export async function queryHandler(");
   out.push();
   out.line("event: APIGatewayProxyEvent");
@@ -1741,18 +2304,25 @@ function genAwsProjection(out, parts, model) {
   out.line("): Promise<APIGatewayProxyResult> {");
   out.push();
   out.line("const client = getRedis();");
-  out.line("const id = event.pathParameters?.id;");
+  out.line("const view = event.queryStringParameters?.view ?? DEFAULT_VIEW;");
+  out.line("const prefix = READ_MODELS[view];");
+  out.line("if (!prefix) {");
+  out.push();
+  out.line("return response(400, { error: `Unknown view: '${view}'`, views: Object.keys(READ_MODELS) });");
+  out.pop();
+  out.line("}");
+  out.line("const id = event.pathParameters?.id ?? event.queryStringParameters?.id;");
   out.line("if (id) {");
   out.push();
-  out.line(`const data = await client.get(\`${keyPrefix}:\${id}\`);`);
+  out.line("const data = await client.get(`${prefix}:${id}`);");
   out.line("if (!data) return response(404, { error: 'Not found' });");
   out.line("return response(200, JSON.parse(data));");
   out.pop();
   out.line("}");
-  out.line(`const ids = await client.zrevrange('${keyPrefix}:all', 0, 49);`);
+  out.line("const ids = await client.zrevrange(`${prefix}:all`, 0, 49);");
   out.line("if (ids.length === 0) return response(200, []);");
   out.line("const pipeline = client.pipeline();");
-  out.line(`for (const key of ids) pipeline.get(\`${keyPrefix}:\${key}\`);`);
+  out.line("for (const key of ids) pipeline.get(`${prefix}:${key}`);");
   out.line("const results = await pipeline.exec();");
   out.line("const items = (results || [])");
   out.push();
@@ -1799,6 +2369,9 @@ const AWS_SHARED_MODULE = "../shared/event-store";
 // Kept here so the emitted import statement and the shared module stay in sync.
 function awsSharedImports(parts) {
   const isCommand = parts.command.length > 0;
+  // An automation slice pairs a command with an automation element: the command
+  // is driven by an automated process that calls out to a model for inference.
+  const isAutomation = isCommand && parts.automation.length > 0;
   const base = ["DomainEvent", "EventTypes", "createEvent", "response"];
   if (isCommand) {
     return [
@@ -1808,6 +2381,8 @@ function awsSharedImports(parts) {
       "appendWithinBoundary",
       "ConcurrencyError",
       "publishToKinesis",
+      // Automation slices invoke a SageMaker endpoint before emitting the event.
+      ...(isAutomation ? ["invokeSageMaker"] : []),
     ];
   }
   // View slice: the projector/query need the Redis accessor instead of the
@@ -1875,6 +2450,12 @@ function genAwsSharedRuntime(out) {
   out.pop();
   out.line("} from '@aws-sdk/lib-dynamodb';");
   out.line("import { KinesisClient, PutRecordCommand } from '@aws-sdk/client-kinesis';");
+  out.line("import {");
+  out.push();
+  out.line("SageMakerRuntimeClient,");
+  out.line("InvokeEndpointCommand,");
+  out.pop();
+  out.line("} from '@aws-sdk/client-sagemaker-runtime';");
   out.line("import { ulid } from 'ulid';");
   out.line("import Redis from 'ioredis';");
   out.blank();
@@ -1883,8 +2464,12 @@ function genAwsSharedRuntime(out) {
   out.line("  marshallOptions: { removeUndefinedValues: true },");
   out.line("});");
   out.line("const kinesis = new KinesisClient({});");
+  out.line("const sagemakerRuntime = new SageMakerRuntimeClient({});");
   out.line("const TABLE_NAME = process.env.EVENT_TABLE_NAME!;");
   out.line("const STREAM_NAME = process.env.KINESIS_STREAM_NAME!;");
+  out.line("// Endpoint invoked by automation slices that call a model for inference.");
+  out.line("// Set on the command Lambda by the CDK stack; empty until an endpoint exists.");
+  out.line("const SAGEMAKER_ENDPOINT_NAME = process.env.SAGEMAKER_ENDPOINT_NAME || '';");
   out.blank();
 
   out.line("// ── Dynamic Consistency Boundary (DCB) primitives ───────────────────");
@@ -2032,8 +2617,14 @@ function genAwsSharedRuntime(out) {
   out.line("): Promise<void> {");
   out.push();
   out.line("// The item carries a tag_<axis> attribute per tag so each gsi_<axis> indexes it.");
+  out.line("// Skip empty/undefined tag values: DynamoDB rejects an empty string as a");
+  out.line("// GSI key, and an unset axis simply should not be indexed on this event.");
   out.line("const item: Record<string, unknown> = { ...domainEvent };");
-  out.line("for (const [axis, value] of Object.entries(domainEvent.tags)) item[`tag_${axis}`] = value;");
+  out.line("for (const [axis, value] of Object.entries(domainEvent.tags)) {");
+  out.push();
+  out.line("if (value !== undefined && value !== '') item[`tag_${axis}`] = value;");
+  out.pop();
+  out.line("}");
   out.blank();
   out.line("const txItems: unknown[] = [");
   out.push();
@@ -2109,6 +2700,42 @@ function genAwsSharedRuntime(out) {
   out.line("}");
   out.blank();
 
+  out.line("// Invoke a SageMaker real-time endpoint for inference. Automation slices");
+  out.line("// call this to turn a feature vector into a prediction, then record the");
+  out.line("// result as a domain event. `features` is JSON-serialised as the request");
+  out.line("// body; the parsed JSON response is returned to the caller. Throws if no");
+  out.line("// endpoint is configured or the response body is empty.");
+  out.line("export async function invokeSageMaker<T = Record<string, unknown>>(");
+  out.push();
+  out.line("features: Record<string, unknown>,");
+  out.line("endpointName: string = SAGEMAKER_ENDPOINT_NAME");
+  out.pop();
+  out.line("): Promise<T> {");
+  out.push();
+  out.line("if (!endpointName) {");
+  out.push();
+  out.line("throw new Error('SAGEMAKER_ENDPOINT_NAME is not set — no endpoint to invoke');");
+  out.pop();
+  out.line("}");
+  out.line("const result = await sagemakerRuntime.send(");
+  out.push();
+  out.line("new InvokeEndpointCommand({");
+  out.push();
+  out.line("EndpointName: endpointName,");
+  out.line("ContentType: 'application/json',");
+  out.line("Accept: 'application/json',");
+  out.line("Body: Buffer.from(JSON.stringify(features)),");
+  out.pop();
+  out.line("})");
+  out.pop();
+  out.line(");");
+  out.line("if (!result.Body) throw new Error('SageMaker returned an empty response body');");
+  out.line("const text = Buffer.from(result.Body as Uint8Array).toString('utf-8');");
+  out.line("return JSON.parse(text) as T;");
+  out.pop();
+  out.line("}");
+  out.blank();
+
   out.line("// Lazily-initialised Redis (ElastiCache) client for the read side.");
   out.line("let redis: Redis;");
   out.line("export function getRedis(): Redis {");
@@ -2168,6 +2795,9 @@ function genAwsSharedInfra(out, allEvents) {
 function genAwsRegionalStack(out, model, parts, modelName, tier) {
   const hasCommand = parts.command.length > 0 || model.elements.some((e) => e.kind === "command");
   const hasReadModel = parts.readModel.length > 0 || model.elements.some((e) => e.kind === "readModel");
+  // An automation anywhere in the model means the command Lambda invokes a
+  // SageMaker endpoint, so the stack must grant it and pass the endpoint name.
+  const hasAutomation = parts.automation.length > 0 || model.elements.some((e) => e.kind === "automation");
   const minimal = tier === "minimal";
 
   out.line("// ─────────────────────────────────────────────────────────────");
@@ -2195,6 +2825,7 @@ function genAwsRegionalStack(out, model, parts, modelName, tier) {
   out.line("import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';");
   out.line("import * as apigateway from 'aws-cdk-lib/aws-apigateway';");
   out.line("import * as eventsources from 'aws-cdk-lib/aws-lambda-event-sources';");
+  if (hasAutomation) out.line("import * as iam from 'aws-cdk-lib/aws-iam';");
   out.line("import { Construct } from 'constructs';");
   out.line("import * as path from 'path';");
   out.blank();
@@ -2204,6 +2835,12 @@ function genAwsRegionalStack(out, model, parts, modelName, tier) {
   out.line("regionLabel: string;");
   out.line("globalTable: dynamodb.Table;");
   out.line("isPrimary: boolean;");
+  if (hasAutomation) {
+    out.line("// Name of the SageMaker endpoint automation slices invoke for inference.");
+    out.line("// Optional: when omitted, InvokeEndpoint is granted account-wide and the");
+    out.line("// handler errors at runtime until an endpoint name is supplied.");
+    out.line("sagemakerEndpointName?: string;");
+  }
   out.pop();
   out.line("}");
   out.blank();
@@ -2250,7 +2887,7 @@ function genAwsRegionalStack(out, model, parts, modelName, tier) {
   out.line("// ── Event distribution — regional Kinesis stream ──");
   out.line("const stream = new kinesis.Stream(this, 'EventStream', {");
   out.push();
-  out.line("streamName: `loan-events-${props.regionLabel}`,");
+  out.line("streamName: `" + resourcePrefix + "-events-${props.regionLabel}`,");
   out.line("shardCount: 2,");
   out.line("retentionPeriod: cdk.Duration.hours(168),");
   out.pop();
@@ -2263,12 +2900,12 @@ function genAwsRegionalStack(out, model, parts, modelName, tier) {
   out.push();
   out.line("description: `Redis subnet group - ${props.regionLabel}`,");
   out.line("subnetIds: vpc.privateSubnets.map((s) => s.subnetId),");
-  out.line("cacheSubnetGroupName: `loan-redis-${props.regionLabel}`,");
+  out.line("cacheSubnetGroupName: `" + resourcePrefix + "-redis-${props.regionLabel}`,");
   out.pop();
   out.line("});");
   out.line("const redisReplicationGroup = new elasticache.CfnReplicationGroup(this, 'RedisCluster', {");
   out.push();
-  out.line("replicationGroupDescription: `Loan read model - ${props.regionLabel}`,");
+  out.line("replicationGroupDescription: `" + ResourcePrefix + " read model - ${props.regionLabel}`,");
   out.line("engine: 'redis',");
   out.line("engineVersion: '7.1',");
   out.line(minimal ? "cacheNodeType: 'cache.t4g.micro'," : "cacheNodeType: 'cache.r7g.large',");
@@ -2281,7 +2918,7 @@ function genAwsRegionalStack(out, model, parts, modelName, tier) {
   out.line("atRestEncryptionEnabled: true,");
   out.line("transitEncryptionEnabled: true,");
   out.line("autoMinorVersionUpgrade: true,");
-  out.line("replicationGroupId: `loan-cache-${props.regionLabel}`,");
+  out.line("replicationGroupId: `" + resourcePrefix + "-cache-${props.regionLabel}`,");
   out.pop();
   out.line("});");
   out.line("redisReplicationGroup.addDependency(subnetGroup);");
@@ -2347,18 +2984,39 @@ function genAwsRegionalStack(out, model, parts, modelName, tier) {
     out.line("...commonProps,");
     out.line("entry: path.join(__dirname, '../../src/commands/handler.ts'),");
     out.line("handler: 'handler',");
-    out.line("functionName: `loan-command-${props.regionLabel}`,");
+    out.line("functionName: `" + resourcePrefix + "-command-${props.regionLabel}`,");
     out.line("timeout: cdk.Duration.seconds(10),");
     out.line("environment: {");
     out.push();
-    out.line("EVENT_TABLE_NAME: 'LoanEvents',");
+    out.line("EVENT_TABLE_NAME: props.globalTable.tableName,");
     out.line("KINESIS_STREAM_NAME: stream.streamName,");
+    if (hasAutomation) {
+      out.line("// SageMaker endpoint invoked by automation slices for inference.");
+      out.line("// Provide the deployed endpoint name via the SAGEMAKER_ENDPOINT_NAME");
+      out.line("// context/env; empty until an endpoint exists (the handler then errors).");
+      out.line("SAGEMAKER_ENDPOINT_NAME: props.sagemakerEndpointName ?? '',");
+    }
     out.pop();
     out.line("},");
     out.pop();
     out.line("});");
     out.line("props.globalTable.grantReadWriteData(commandHandler);");
     out.line("stream.grantWrite(commandHandler);");
+    if (hasAutomation) {
+      out.blank();
+      out.line("// Allow the command Lambda to invoke the model endpoint. Scoped to a");
+      out.line("// named endpoint when provided, else to any endpoint in this account.");
+      out.line("commandHandler.addToRolePolicy(new iam.PolicyStatement({");
+      out.push();
+      out.line("actions: ['sagemaker:InvokeEndpoint'],");
+      out.line("resources: [props.sagemakerEndpointName");
+      out.push();
+      out.line("? `arn:aws:sagemaker:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:endpoint/${props.sagemakerEndpointName}`");
+      out.line(": `arn:aws:sagemaker:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:endpoint/*`],");
+      out.pop();
+      out.pop();
+      out.line("}));");
+    }
     out.blank();
   }
 
@@ -2369,7 +3027,7 @@ function genAwsRegionalStack(out, model, parts, modelName, tier) {
     out.line("...commonProps,");
     out.line("entry: path.join(__dirname, '../../src/queries/handler.ts'),");
     out.line("handler: 'handler',");
-    out.line("functionName: `loan-query-${props.regionLabel}`,");
+    out.line("functionName: `" + resourcePrefix + "-query-${props.regionLabel}`,");
     out.line("timeout: cdk.Duration.seconds(5),");
     out.line("vpc,");
     out.line("vpcSubnets: { subnets: vpc.privateSubnets },");
@@ -2385,7 +3043,7 @@ function genAwsRegionalStack(out, model, parts, modelName, tier) {
     out.line("...commonProps,");
     out.line("entry: path.join(__dirname, '../../src/projector/handler.ts'),");
     out.line("handler: 'handler',");
-    out.line("functionName: `loan-projector-${props.regionLabel}`,");
+    out.line("functionName: `" + resourcePrefix + "-projector-${props.regionLabel}`,");
     out.line("timeout: cdk.Duration.seconds(30),");
     out.line("vpc,");
     out.line("vpcSubnets: { subnets: vpc.privateSubnets },");
@@ -2417,9 +3075,9 @@ function genAwsRegionalStack(out, model, parts, modelName, tier) {
 
   // API Gateway + routes
   out.line("// ── API Gateway (prod stage, throttled, CORS) ──");
-  out.line("const api = new apigateway.RestApi(this, 'LoanApi', {");
+  out.line("const api = new apigateway.RestApi(this, '" + ResourcePrefix + "Api', {");
   out.push();
-  out.line("restApiName: `Loan API (${props.regionLabel})`,");
+  out.line("restApiName: `" + ResourcePrefix + " API (${props.regionLabel})`,");
   out.line("deployOptions: {");
   out.push();
   out.line("stageName: 'prod',");
@@ -2439,14 +3097,14 @@ function genAwsRegionalStack(out, model, parts, modelName, tier) {
   out.line("});");
   out.blank();
   out.line("const apiResource = api.root.addResource('api');");
-  out.line("const loansResource = apiResource.addResource('loans');");
+  out.line("const recordsResource = apiResource.addResource('" + apiPath + "');");
   if (hasCommand) {
-    out.line("loansResource.addMethod('POST', new apigateway.LambdaIntegration(commandHandler));");
+    out.line("recordsResource.addMethod('POST', new apigateway.LambdaIntegration(commandHandler));");
   }
   if (hasReadModel) {
-    out.line("loansResource.addMethod('GET', new apigateway.LambdaIntegration(queryHandler));");
-    out.line("const loanByIdResource = loansResource.addResource('{id}');");
-    out.line("loanByIdResource.addMethod('GET', new apigateway.LambdaIntegration(queryHandler));");
+    out.line("recordsResource.addMethod('GET', new apigateway.LambdaIntegration(queryHandler));");
+    out.line("const recordByIdResource = recordsResource.addResource('{id}');");
+    out.line("recordByIdResource.addMethod('GET', new apigateway.LambdaIntegration(queryHandler));");
   }
   out.pop();
   out.line("}");
@@ -2538,6 +3196,20 @@ export function generateAwsNative({ model, tests, sliceName, decidedExclusions =
   }
   if (part === "infra") {
     return generateAwsInfra({ model, sliceName, tier });
+  }
+  if (part === "projection") {
+    // Model-level read side: one projector + query over EVERY read model in
+    // the model (not a single slice). Partition the whole model, then drop
+    // commands so the projection path runs across all read models and folds
+    // each source event into its own read model.
+    const out = new Emitter();
+    const parts = partition(model);
+    parts.command = [];
+    genAwsHeader(out, sliceName || "views");
+    genAwsSliceImports(out, parts);
+    genAwsInterfaces(out, parts);
+    genAwsProjection(out, parts, model);
+    return out.toString();
   }
 
   const out = new Emitter();

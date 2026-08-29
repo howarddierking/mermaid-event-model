@@ -1,0 +1,23 @@
+[package]
+name = "register-handler"
+version = "0.1.0"
+edition = "2021"
+
+# The Lambda custom-runtime binary MUST be named `bootstrap`.
+[[bin]]
+name = "bootstrap"
+path = "src/main.rs"
+
+[dependencies]
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-dynamodb = "1"
+lambda_runtime = "0.13"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ulid = "1"
+chrono = "0.4"
+
+[profile.release]
+strip = true
+lto = true
