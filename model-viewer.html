@@ -65,6 +65,77 @@
   }
   .content pre.mermaid svg { display: block; }
 
+  /* Code generation panel (one per slice, shown at the top of the content) */
+  .codegen {
+    margin: 0 0 24px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #fff;
+    overflow: hidden;
+  }
+  .codegen-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e5e7eb;
+  }
+  .codegen-bar .codegen-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #475569;
+    margin-right: auto;
+  }
+  .codegen-bar button {
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    padding: 6px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #fff;
+    color: #1f2937;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .codegen-bar button:hover { background: #eef2f7; border-color: #9ca3af; }
+  .codegen-bar button:active { background: #e5e7eb; }
+  .codegen-bar button:disabled { opacity: 0.55; cursor: default; }
+  .codegen-bar button.primary { background: #1e3a8a; color: #fff; border-color: #1e3a8a; }
+  .codegen-bar button.primary:hover { background: #1e40af; }
+  /* Qualified with .content so these win over the base `.content pre` rule
+     (which would otherwise force a light background onto this <pre>). */
+  .content pre.codegen-output {
+    margin: 0;
+    padding: 14px 16px;
+    background: #0f172a;
+    color: #e2e8f0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+    line-height: 1.5;
+    max-height: 460px;
+    overflow: auto;
+    white-space: pre;
+    tab-size: 2;
+    border: none;
+  }
+  .content pre.codegen-output.empty {
+    color: #94a3b8;
+    font-style: italic;
+    white-space: normal;
+    background: #f8fafc;
+  }
+
+  /* Rendered blueprint (slice spec) preview inside the panel. */
+  .codegen-preview { padding: 8px 16px 16px; }
+  .codegen-preview .codegen-hint { color: #6b7280; font-style: italic; font-size: 13px; }
+  .codegen-preview h1 { font-size: 20px; margin: 8px 0; }
+  .codegen-preview h2 { font-size: 15px; margin-top: 18px; border-bottom: 1px solid #e5e7eb; padding-bottom: 3px; }
+  .codegen-preview pre.mermaid { background: #fafafa; border: 1px solid #e5e7eb; padding: 12px; overflow: auto; }
+
   .empty { color: #6b7280; font-style: italic; margin-top: 40px; text-align: center; }
   .error {
     color: #991b1b;
@@ -105,6 +176,7 @@
 import mermaid from 'mermaid';
 import { marked } from 'marked';
 import diagramDefinitions from './index.js';
+import { generateSliceSpecFromModel } from './codegen.js';
 
 await mermaid.registerExternalDiagrams(diagramDefinitions);
 mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
@@ -195,6 +267,149 @@ function renderSidebar(sliceFiles) {
   }
 }
 
+// Build the blueprint panel for the active slice and insert it at the top of
+// the content. It stamps the slice spec (Model · Intent · Tests) from the
+// parent model — the forward `spec-slices` step of the reentrant lifecycle —
+// and renders it inline. Code generation (binding the blueprint to a stack) is
+// a separate downstream step, deliberately not in this viewer.
+function attachCodegenPanel(container, sliceId) {
+  const panel = document.createElement('div');
+  panel.className = 'codegen';
+
+  // ── Blueprint (the slice spec: Model · Intent · Tests) ────────────────────
+  // The viewer produces the BLUEPRINT — the slice-spec markdown stamped from
+  // the parent model (Model section derived; Description/Tests scaffolded for
+  // the author). It never produces code: binding a blueprint to a stack
+  // (Axon, AWS, …) is a downstream step outside this tool.
+  const bpBar = document.createElement('div');
+  bpBar.className = 'codegen-bar';
+  const bpTitle = document.createElement('span');
+  bpTitle.className = 'codegen-title';
+  bpTitle.textContent = 'Blueprint · slice spec (Model · Intent · Tests)';
+  bpBar.appendChild(bpTitle);
+
+  const blueprintBtn = document.createElement('button');
+  blueprintBtn.type = 'button';
+  blueprintBtn.className = 'primary';
+  blueprintBtn.textContent = 'Generate blueprint';
+
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.textContent = 'Copy markdown';
+  copyBtn.disabled = true;
+
+  const dlBtn = document.createElement('button');
+  dlBtn.type = 'button';
+  dlBtn.textContent = 'Download .md';
+  dlBtn.disabled = true;
+
+  bpBar.append(blueprintBtn, copyBtn, dlBtn);
+
+  // A rendered-markdown region (not a <pre>): the stamped spec shows exactly as
+  // the viewer renders any slice spec — the Model diagram plus Intent & Tests.
+  const preview = document.createElement('div');
+  preview.className = 'codegen-preview';
+  preview.innerHTML = sliceId
+    ? '<p class="codegen-hint">Generate this slice\u2019s blueprint: the spec ' +
+      '(Model \u00b7 Intent \u00b7 Tests) stamped from the parent model. The Model ' +
+      'section is derived; Description and Tests are yours to fill in.</p>'
+    : '<p class="codegen-hint">Open a slice from the sidebar to generate its ' +
+      'blueprint (Model \u00b7 Intent \u00b7 Tests).</p>';
+
+  panel.append(bpBar, preview);
+  container.insertBefore(panel, container.firstChild);
+
+  if (!sliceId) { blueprintBtn.disabled = true; return panel; }
+
+  const slug = sliceId.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase();
+  let generated = null;
+
+  blueprintBtn.addEventListener('click', async () => {
+    blueprintBtn.disabled = true;
+    blueprintBtn.textContent = 'Generating\u2026';
+    try {
+      // Stamp the spec from the PARENT model (not the loaded slice file), so the
+      // Model section is freshly derived — the reentrant forward step.
+      const modelSrc = await fetchParentModel();
+      generated = generateSliceSpecFromModel(modelSrc, { sliceId });
+      await renderMarkdownInto(preview, generated);
+      copyBtn.disabled = false;
+      dlBtn.disabled = false;
+    } catch (err) {
+      console.error('blueprint generation failed', err);
+      preview.innerHTML = '<div class="error">Blueprint generation failed:\n' +
+        (err && err.stack ? err.stack : String(err)) + '</div>';
+    } finally {
+      blueprintBtn.disabled = false;
+      blueprintBtn.textContent = 'Regenerate blueprint';
+    }
+  });
+
+  copyBtn.addEventListener('click', async () => {
+    if (generated == null) return;
+    const label = copyBtn.textContent;
+    try {
+      await navigator.clipboard.writeText(generated);
+      copyBtn.textContent = 'Copied';
+    } catch (_) {
+      const ta = document.createElement('textarea');
+      ta.value = generated;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); copyBtn.textContent = 'Copied'; }
+      catch { copyBtn.textContent = 'Copy failed'; }
+      ta.remove();
+    }
+    setTimeout(() => { copyBtn.textContent = label; }, 1400);
+  });
+
+  dlBtn.addEventListener('click', () => {
+    if (generated == null) return;
+    downloadText(generated, 'text/markdown;charset=utf-8', slug + '.md');
+  });
+
+  return panel;
+}
+
+// Fetch the parent model markdown (the file that declares the slices).
+async function fetchParentModel() {
+  const res = await fetch('./' + encodeURIComponent(MODEL_FILE) + '?t=' + Date.now(), { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Could not load parent model ${MODEL_FILE}: ${res.status}`);
+  return await res.text();
+}
+
+// Render markdown into `el`: parse with marked, convert fenced mermaid blocks,
+// and run mermaid on them. Shared by the model/slice view and the blueprint
+// preview so a generated spec renders exactly like a loaded one.
+async function renderMarkdownInto(el, md) {
+  el.innerHTML = marked.parse(md);
+  el.querySelectorAll('pre code.language-mermaid').forEach((code) => {
+    const pre = code.parentElement;
+    const newPre = document.createElement('pre');
+    newPre.className = 'mermaid';
+    newPre.textContent = code.textContent;
+    pre.replaceWith(newPre);
+  });
+  const nodes = [...el.querySelectorAll('pre.mermaid')];
+  if (nodes.length > 0) {
+    try { await mermaid.run({ nodes }); }
+    catch (err) { console.error('mermaid render error', err); }
+  }
+}
+
+// Trigger a browser download of `text` with the given mime type and filename.
+function downloadText(text, mime, filename) {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function loadAndRender() {
   let src;
   try {
@@ -206,25 +421,25 @@ async function loadAndRender() {
   if (src === lastSrc) return;
   lastSrc = src;
 
-  content.innerHTML = marked.parse(src);
-
-  // marked emits <pre><code class="language-mermaid">. Convert to <pre class="mermaid">.
-  content.querySelectorAll('pre code.language-mermaid').forEach((code) => {
-    const pre = code.parentElement;
-    const newPre = document.createElement('pre');
-    newPre.className = 'mermaid';
-    newPre.textContent = code.textContent;
-    pre.replaceWith(newPre);
-  });
+  await renderMarkdownInto(content, src);
 
   const nodes = [...content.querySelectorAll('pre.mermaid')];
   if (nodes.length > 0) {
-    try {
-      await mermaid.run({ nodes });
-    } catch (err) {
-      console.error('mermaid render error', err);
-    }
+    // Wire slice-label chips to their spec files (upstream navigation).
     wireSliceLinks();
+
+    // Code generation is per-slice: show one panel at the top of the content
+    // whenever the source declares an eventModel block (slice specs and the
+    // model overview). It reads the raw markdown (`src`), whose eventModel and
+    // sliceTests blocks the generator extracts itself.
+    if (/(^|\n)\s*eventModel\b/.test(src) || /```[\s\S]*?\beventModel\b/.test(src)) {
+      // The blueprint panel stamps a slice spec from the parent model, so it
+      // needs the slice id. On a slice view, read it from the file's
+      // `<!-- slice id: X -->` comment; the model overview has no single slice.
+      const idMatch = src.match(/<!--\s*slice id:\s*([\w-]+)\s*-->/);
+      const sliceId = activeFile === '__model' ? null : (idMatch ? idMatch[1] : null);
+      attachCodegenPanel(content, sliceId);
+    }
   }
 }
 

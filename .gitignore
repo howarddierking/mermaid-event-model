@@ -27,3 +27,9 @@ target/
 # Vite build output
 dist/
 .gstack/
+
+# AWS CDK
+_site/
+infra/cdk.out/
+infra/node_modules/
+infra/cdk-outputs.json
