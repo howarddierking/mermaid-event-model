@@ -1048,6 +1048,175 @@ export function generateManifestFromSource(src, opts = {}) {
   return JSON.stringify(manifest, null, 2) + "\n";
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Slice-spec generation — the BLUEPRINT (Model · Intent · Tests) markdown.
+//
+// This is the `spec-slices` step of the reentrant lifecycle, ported to JS so
+// the viewer can produce the slice spec (register.md-shaped). It stamps the
+// ## Model section from the parent model (a self-contained eventModel snippet
+// of just this slice) and scaffolds Description / Tests. The Model section is
+// derived; Description and Tests are user-owned placeholders.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Re-emit an element's DSL declaration line (kind[:lane] id["Label"] [reads ...])
+// plus its brace-delimited data section, verbatim-equivalent to the parent.
+function elementDslLines(el) {
+  const laneQual = el.lane ? `:${el.lane}` : "";
+  const label = el.label && el.label !== el.id ? `["${el.label}"]` : "";
+  const head = `\t${el.kind}${laneQual} ${el.id}${label}`;
+  const lines = [];
+  const hasFields = el.fields && el.fields.length;
+  if (hasFields) {
+    lines.push(`${head} {`);
+    for (const f of el.fields) lines.push(`\t\t${f.axis ? "*" : ""}${f.name}: ${f.type}`);
+    lines.push("\t}");
+  } else {
+    lines.push(head);
+  }
+  // Structured reads branches (reads [...] by axis), one indented line each.
+  for (const b of el.readBranches || []) {
+    const evs = (b.events || []).join(", ");
+    const by = (b.axes && b.axes.length) ? ` by ${b.axes.join(", ")}` : "";
+    lines.push(`\t\treads [${evs}]${by}`);
+  }
+  return lines;
+}
+
+// Build the tab-indented eventModel body for one slice — a self-contained
+// snippet of just this slice's nodes + edges, mirroring the spec-slices skill.
+function buildSliceModelBody(model, slice) {
+  const elById = new Map(model.elements.map((e) => [e.id, e]));
+  const memberIds = new Set(slice.nodeIds || []);
+  const members = [...memberIds].map((id) => elById.get(id)).filter(Boolean);
+
+  // Referenced actors (ui:/automation: lanes) and aggregates (domainEvent:
+  // lanes), in the parent's declaration order.
+  const referencedActors = new Set();
+  const referencedAggs = new Set();
+  for (const el of members) {
+    if ((el.kind === "ui" || el.kind === "automation") && el.lane) referencedActors.add(el.lane);
+    if (el.kind === "domainEvent" && el.lane) referencedAggs.add(el.lane);
+  }
+  const actors = model.actors.filter((a) => referencedActors.has(a));
+  const aggregates = model.aggregates.filter((a) => referencedAggs.has(a));
+
+  const lines = [];
+  for (const a of actors) lines.push(`\tactor ${a}`);
+  for (const a of aggregates) lines.push(`\taggregate ${a}`);
+  // Elements in the parent's declaration order (stable, matches the skill).
+  for (const el of model.elements) {
+    if (memberIds.has(el.id)) lines.push(...elementDslLines(el));
+  }
+  const label = slice.label && slice.label !== slice.id ? `["${slice.label}"]` : "";
+  lines.push(`\tslice ${slice.id}${label}`);
+  for (const e of slice.edges || []) lines.push(`\t\t${e.from}-->${e.to}`);
+  return lines.join("\n");
+}
+
+// Classify a slice into one of the four canonical patterns from its own edges
+// (the spec-slices / add-slices decision table). externalEvent is the sole
+// discriminator between Automation and Translation.
+function classifySlicePattern(model, slice) {
+  const elById = new Map(model.elements.map((e) => [e.id, e]));
+  const kindOf = (id) => (elById.get(id) ? elById.get(id).kind : null);
+  const edges = slice.edges || [];
+  const has = (fromKind, toKind) =>
+    edges.some((e) => kindOf(e.from) === fromKind && kindOf(e.to) === toKind);
+  const memberKinds = new Set((slice.nodeIds || []).map(kindOf));
+
+  const hasReadToAuto = has("readModel", "automation");
+  const hasAutoToCmd = has("automation", "command");
+  const readSideEvents = edges
+    .filter((e) => kindOf(e.to) === "readModel")
+    .map((e) => kindOf(e.from));
+  const anyExternalOnReadSide = readSideEvents.includes("externalEvent");
+
+  if (hasReadToAuto && hasAutoToCmd) {
+    return anyExternalOnReadSide ? "Translation" : "Automation";
+  }
+  if (memberKinds.has("command")) {
+    if (has("ui", "command")) return "Command";
+    if (has("externalEvent", "command")) return "Translation [abbreviated]";
+    if (has("domainEvent", "command")) return "Automation [abbreviated]";
+    return "Command";
+  }
+  if (memberKinds.has("readModel")) return "View";
+  return "Unclassified";
+}
+
+// The slice-spec scaffold (mirrors skills/spec-slices/template.md). Model is
+// derived and filled here; Description and Tests are placeholder prompts the
+// user owns.
+function sliceSpecTemplate({ title, id, pattern, modelBody }) {
+  return `# ${title}
+
+<!-- slice id: ${id} -->
+
+## Model
+
+<!-- Derived from the parent eventModel and refreshed on every spec-slices run. Do not hand-edit. -->
+
+**Pattern:** ${pattern}
+
+\`\`\`mermaid
+eventModel
+${modelBody}
+\`\`\`
+
+## Description
+
+_Describe the high-level intent of this slice in prose. What user-visible capability does it represent? Why does it matter? When does it run, and what constraint or invariant does it preserve?_
+
+## Tests
+
+\`\`\`mermaid
+sliceTests
+\ttest["Describe what this test verifies"]
+\t\tgiven
+\t\t\t# Preconditions: events that have already occurred,
+\t\t\t# read models that must be present.
+\t\twhen
+\t\t\t# The command (or signal) under test. Omit \`when\`
+\t\t\t# for state-view tests that only project a read model.
+\t\tthen
+\t\t\t# Expected outcomes: emitted events, populated read
+\t\t\t# models, signals to external systems. For rejection
+\t\t\t# scenarios use \`error["<message>"]\` — the message is
+\t\t\t# read verbatim by code generation.
+\t# Data-section fields may carry example values to demonstrate the
+\t# case and seed code-gen fixtures, e.g. { checkIn: date = 2026-08-12 }.
+\`\`\`
+`;
+}
+
+/**
+ * Generate the slice-spec BLUEPRINT markdown (Model · Intent · Tests) for one
+ * slice, stamped from the parent model. The Model section is derived; the
+ * Description and Tests are the template scaffold for the author to fill.
+ *
+ * @param {string} modelSrc  the parent model markdown/DSL (contains slices)
+ * @param {object} [opts]
+ * @param {string} [opts.sliceId]  which slice to stamp; defaults to the first
+ * @returns {string} slice-spec markdown
+ */
+export function generateSliceSpecFromModel(modelSrc, opts = {}) {
+  const model = parseEventModel(modelSrc);
+  if (!model.slices || model.slices.length === 0) {
+    throw new Error("the model declares no slices — nothing to stamp a spec from");
+  }
+  const slice = opts.sliceId
+    ? model.slices.find((s) => s.id === opts.sliceId)
+    : model.slices[0];
+  if (!slice) throw new Error(`slice '${opts.sliceId}' not found in the model`);
+
+  return sliceSpecTemplate({
+    title: slice.label || slice.id,
+    id: slice.id,
+    pattern: classifySlicePattern(model, slice),
+    modelBody: buildSliceModelBody(model, slice),
+  });
+}
+
 // ═════════════════════════════════════════════════════════════════════════
 // AWS-native target — TypeScript CDK + Lambda handlers.
 //

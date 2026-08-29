@@ -129,6 +129,13 @@
     background: #f8fafc;
   }
 
+  /* Rendered blueprint (slice spec) preview inside the panel. */
+  .codegen-preview { padding: 8px 16px 16px; }
+  .codegen-preview .codegen-hint { color: #6b7280; font-style: italic; font-size: 13px; }
+  .codegen-preview h1 { font-size: 20px; margin: 8px 0; }
+  .codegen-preview h2 { font-size: 15px; margin-top: 18px; border-bottom: 1px solid #e5e7eb; padding-bottom: 3px; }
+  .codegen-preview pre.mermaid { background: #fafafa; border: 1px solid #e5e7eb; padding: 12px; overflow: auto; }
+
   .empty { color: #6b7280; font-style: italic; margin-top: 40px; text-align: center; }
   .error {
     color: #991b1b;
@@ -169,7 +176,7 @@
 import mermaid from 'mermaid';
 import { marked } from 'marked';
 import diagramDefinitions from './index.js';
-import { generateFromSource, generateAwsFromSource, generateManifestFromSource } from './codegen.js';
+import { generateSliceSpecFromModel } from './codegen.js';
 
 await mermaid.registerExternalDiagrams(diagramDefinitions);
 mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
@@ -260,126 +267,83 @@ function renderSidebar(sliceFiles) {
   }
 }
 
-// Build a code-generation panel for the active slice and insert it at the top
-// of the content. Codegen is per-slice (it needs both the eventModel and
-// sliceTests blocks), so there is exactly one panel, generated lazily on click.
-function attachCodegenPanel(container, src, sliceName) {
+// Build the blueprint panel for the active slice and insert it at the top of
+// the content. It stamps the slice spec (Model · Intent · Tests) from the
+// parent model — the forward `spec-slices` step of the reentrant lifecycle —
+// and renders it inline. Code generation (binding the blueprint to a stack) is
+// a separate downstream step, deliberately not in this viewer.
+function attachCodegenPanel(container, sliceId) {
   const panel = document.createElement('div');
   panel.className = 'codegen';
 
-  const bar = document.createElement('div');
-  bar.className = 'codegen-bar';
+  // ── Blueprint (the slice spec: Model · Intent · Tests) ────────────────────
+  // The viewer produces the BLUEPRINT — the slice-spec markdown stamped from
+  // the parent model (Model section derived; Description/Tests scaffolded for
+  // the author). It never produces code: binding a blueprint to a stack
+  // (Axon, AWS, …) is a downstream step outside this tool.
+  const bpBar = document.createElement('div');
+  bpBar.className = 'codegen-bar';
+  const bpTitle = document.createElement('span');
+  bpTitle.className = 'codegen-title';
+  bpTitle.textContent = 'Blueprint · slice spec (Model · Intent · Tests)';
+  bpBar.appendChild(bpTitle);
 
-  const title = document.createElement('span');
-  title.className = 'codegen-title';
-  title.textContent = 'Code Generation';
-  bar.appendChild(title);
-
-  const genBtn = document.createElement('button');
-  genBtn.type = 'button';
-  genBtn.className = 'primary';
-  genBtn.textContent = 'Generate Axon (Java)';
-
-  // A second primary target: the AWS-native binding (CDK + Lambda, TypeScript).
-  // On the model (__model) view this produces the COMMON shared runtime
-  // (event-store envelope, merged EventTypes, DynamoDB/Kinesis/Redis helpers,
-  // shared CDK infra); on a slice view it produces ONLY that slice's part,
-  // importing the shared runtime. The generator infers which from the source.
-  const isModelView = sliceName === MODEL;
-  const awsBtn = document.createElement('button');
-  awsBtn.type = 'button';
-  awsBtn.className = 'primary';
-  awsBtn.textContent = isModelView ? 'Generate AWS shared runtime' : 'Generate AWS (CDK/TS)';
-
-  // On the model view, a third target: the shared CDK infrastructure as a
-  // live, compilable infra/stacks/regional-stack.ts (VPC, DynamoDB ref,
-  // Kinesis, ElastiCache Redis, Lambdas, API Gateway). Not shown on slices.
-  const infraBtn = isModelView ? document.createElement('button') : null;
-  if (infraBtn) {
-    infraBtn.type = 'button';
-    infraBtn.className = 'primary';
-    infraBtn.textContent = 'Generate AWS infra (CDK)';
-  }
+  const blueprintBtn = document.createElement('button');
+  blueprintBtn.type = 'button';
+  blueprintBtn.className = 'primary';
+  blueprintBtn.textContent = 'Generate blueprint';
 
   const copyBtn = document.createElement('button');
   copyBtn.type = 'button';
-  copyBtn.textContent = 'Copy';
+  copyBtn.textContent = 'Copy markdown';
   copyBtn.disabled = true;
 
   const dlBtn = document.createElement('button');
   dlBtn.type = 'button';
-  dlBtn.textContent = 'Download';
+  dlBtn.textContent = 'Download .md';
   dlBtn.disabled = true;
 
-  const manifestBtn = document.createElement('button');
-  manifestBtn.type = 'button';
-  manifestBtn.textContent = 'Download manifest.json';
-  manifestBtn.disabled = true;
+  bpBar.append(blueprintBtn, copyBtn, dlBtn);
 
-  bar.append(genBtn, awsBtn);
-  if (infraBtn) bar.append(infraBtn);
-  bar.append(copyBtn, dlBtn, manifestBtn);
+  // A rendered-markdown region (not a <pre>): the stamped spec shows exactly as
+  // the viewer renders any slice spec — the Model diagram plus Intent & Tests.
+  const preview = document.createElement('div');
+  preview.className = 'codegen-preview';
+  preview.innerHTML = sliceId
+    ? '<p class="codegen-hint">Generate this slice\u2019s blueprint: the spec ' +
+      '(Model \u00b7 Intent \u00b7 Tests) stamped from the parent model. The Model ' +
+      'section is derived; Description and Tests are yours to fill in.</p>'
+    : '<p class="codegen-hint">Open a slice from the sidebar to generate its ' +
+      'blueprint (Model \u00b7 Intent \u00b7 Tests).</p>';
 
-  const output = document.createElement('pre');
-  output.className = 'codegen-output empty';
-  output.textContent = isModelView
-    ? 'Generate scaffolding from this model. “Generate AWS shared runtime” emits the COMMON runtime once (src/shared/event-store.ts) — the event-store envelope, the merged EventTypes map, and the DynamoDB/Kinesis/Redis helpers. “Generate AWS infra (CDK)” emits the shared stack (infra/stacks/regional-stack.ts) — VPC, DynamoDB, Kinesis, Redis, Lambdas, API Gateway. Open a slice to generate just its part.'
-    : 'Generate Axon Framework 5 (Java) or AWS-native (CDK + Lambda, TypeScript) scaffolding from this slice — commands, events, a command handler (or projection/projector), and validation derived from the slice tests. The AWS output imports the model’s shared runtime instead of re-emitting it.';
-
-  panel.append(bar, output);
+  panel.append(bpBar, preview);
   container.insertBefore(panel, container.firstChild);
 
+  if (!sliceId) { blueprintBtn.disabled = true; return panel; }
+
+  const slug = sliceId.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase();
   let generated = null;
-  // The extension of the currently shown output ('java' or 'ts'), so Copy /
-  // Download reflect whichever target was generated last.
-  let generatedExt = 'java';
-  // An explicit download filename for the current output (overrides fileBase).
-  let downloadName = null;
-  // File base is conventionally PascalCase; derive one from the slice name.
-  const fileBase = ((sliceName || 'slice').replace(/[^a-z0-9]+/gi, ' ').trim().split(/\s+/)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('')) || 'Slice';
 
-  const genButtons = [genBtn, awsBtn, ...(infraBtn ? [infraBtn] : [])];
-
-  // The generators are independent: clicking one replaces the shown output.
-  // `label` is the button's resting text; `produce()` returns the source;
-  // `ext` picks the download extension; `name` optionally fixes the filename.
-  const runGenerator = (btn, label, produce, ext, name) => {
-    genButtons.forEach((b) => (b.disabled = true));
-    btn.textContent = 'Generating…';
+  blueprintBtn.addEventListener('click', async () => {
+    blueprintBtn.disabled = true;
+    blueprintBtn.textContent = 'Generating\u2026';
     try {
-      generated = produce();
-      generatedExt = ext;
-      downloadName = name || null;
-      output.textContent = generated;
-      output.classList.remove('empty');
+      // Stamp the spec from the PARENT model (not the loaded slice file), so the
+      // Model section is freshly derived — the reentrant forward step.
+      const modelSrc = await fetchParentModel();
+      generated = generateSliceSpecFromModel(modelSrc, { sliceId });
+      await renderMarkdownInto(preview, generated);
       copyBtn.disabled = false;
       dlBtn.disabled = false;
-      manifestBtn.disabled = false;
-      dlBtn.textContent = 'Download .' + ext;
     } catch (err) {
-      console.error('codegen failed', err);
-      output.textContent = 'Code generation failed:\n' + (err && err.stack ? err.stack : String(err));
-      output.classList.remove('empty');
+      console.error('blueprint generation failed', err);
+      preview.innerHTML = '<div class="error">Blueprint generation failed:\n' +
+        (err && err.stack ? err.stack : String(err)) + '</div>';
     } finally {
-      genButtons.forEach((b) => (b.disabled = false));
-      btn.textContent = label;
+      blueprintBtn.disabled = false;
+      blueprintBtn.textContent = 'Regenerate blueprint';
     }
-  };
-
-  genBtn.addEventListener('click', () =>
-    runGenerator(genBtn, 'Regenerate Axon (Java)',
-      () => generateFromSource(src, { sliceName }), 'java'));
-  awsBtn.addEventListener('click', () =>
-    runGenerator(awsBtn, isModelView ? 'Regenerate AWS shared runtime' : 'Regenerate AWS (CDK/TS)',
-      () => generateAwsFromSource(src, { sliceName }), 'ts',
-      isModelView ? 'event-store.ts' : null));
-  if (infraBtn) {
-    infraBtn.addEventListener('click', () =>
-      runGenerator(infraBtn, 'Regenerate AWS infra (CDK)',
-        () => generateAwsFromSource(src, { sliceName, part: 'infra' }), 'ts',
-        'regional-stack.ts'));
-  }
+  });
 
   copyBtn.addEventListener('click', async () => {
     if (generated == null) return;
@@ -388,7 +352,6 @@ function attachCodegenPanel(container, src, sliceName) {
       await navigator.clipboard.writeText(generated);
       copyBtn.textContent = 'Copied';
     } catch (_) {
-      // Fallback for environments without the async clipboard API.
       const ta = document.createElement('textarea');
       ta.value = generated;
       document.body.appendChild(ta);
@@ -402,45 +365,49 @@ function attachCodegenPanel(container, src, sliceName) {
 
   dlBtn.addEventListener('click', () => {
     if (generated == null) return;
-    const mime = generatedExt === 'ts'
-      ? 'application/typescript;charset=utf-8'
-      : 'text/x-java-source;charset=utf-8';
-    const blob = new Blob([generated], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    // Use the generator's fixed filename (event-store.ts / regional-stack.ts)
-    // when set; otherwise the PascalCase slice base + extension.
-    a.download = downloadName || (fileBase + '.' + generatedExt);
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  });
-
-  // The binding manifest: the stack-independent core (what a migration is
-  // checked against) plus the disposable binding section. Generated on demand.
-  manifestBtn.addEventListener('click', () => {
-    const label = manifestBtn.textContent;
-    try {
-      const manifest = generateManifestFromSource(src, { sliceName });
-      const blob = new Blob([manifest], { type: 'application/json;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = (sliceName || 'slice').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() + '.manifest.json';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('manifest generation failed', err);
-      manifestBtn.textContent = 'Failed';
-      setTimeout(() => { manifestBtn.textContent = label; }, 1600);
-    }
+    downloadText(generated, 'text/markdown;charset=utf-8', slug + '.md');
   });
 
   return panel;
+}
+
+// Fetch the parent model markdown (the file that declares the slices).
+async function fetchParentModel() {
+  const res = await fetch('./' + encodeURIComponent(MODEL_FILE) + '?t=' + Date.now(), { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Could not load parent model ${MODEL_FILE}: ${res.status}`);
+  return await res.text();
+}
+
+// Render markdown into `el`: parse with marked, convert fenced mermaid blocks,
+// and run mermaid on them. Shared by the model/slice view and the blueprint
+// preview so a generated spec renders exactly like a loaded one.
+async function renderMarkdownInto(el, md) {
+  el.innerHTML = marked.parse(md);
+  el.querySelectorAll('pre code.language-mermaid').forEach((code) => {
+    const pre = code.parentElement;
+    const newPre = document.createElement('pre');
+    newPre.className = 'mermaid';
+    newPre.textContent = code.textContent;
+    pre.replaceWith(newPre);
+  });
+  const nodes = [...el.querySelectorAll('pre.mermaid')];
+  if (nodes.length > 0) {
+    try { await mermaid.run({ nodes }); }
+    catch (err) { console.error('mermaid render error', err); }
+  }
+}
+
+// Trigger a browser download of `text` with the given mime type and filename.
+function downloadText(text, mime, filename) {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 async function loadAndRender() {
@@ -454,25 +421,10 @@ async function loadAndRender() {
   if (src === lastSrc) return;
   lastSrc = src;
 
-  content.innerHTML = marked.parse(src);
-
-  // marked emits <pre><code class="language-mermaid">. Convert to <pre class="mermaid">.
-  content.querySelectorAll('pre code.language-mermaid').forEach((code) => {
-    const pre = code.parentElement;
-    const newPre = document.createElement('pre');
-    newPre.className = 'mermaid';
-    newPre.textContent = code.textContent;
-    pre.replaceWith(newPre);
-  });
+  await renderMarkdownInto(content, src);
 
   const nodes = [...content.querySelectorAll('pre.mermaid')];
   if (nodes.length > 0) {
-    try {
-      await mermaid.run({ nodes });
-    } catch (err) {
-      console.error('mermaid render error', err);
-    }
-
     // Wire slice-label chips to their spec files (upstream navigation).
     wireSliceLinks();
 
@@ -481,8 +433,12 @@ async function loadAndRender() {
     // model overview). It reads the raw markdown (`src`), whose eventModel and
     // sliceTests blocks the generator extracts itself.
     if (/(^|\n)\s*eventModel\b/.test(src) || /```[\s\S]*?\beventModel\b/.test(src)) {
-      const sliceName = activeFile === '__model' ? MODEL : activeFile.replace(/\.md$/, '');
-      attachCodegenPanel(content, src, sliceName);
+      // The blueprint panel stamps a slice spec from the parent model, so it
+      // needs the slice id. On a slice view, read it from the file's
+      // `<!-- slice id: X -->` comment; the model overview has no single slice.
+      const idMatch = src.match(/<!--\s*slice id:\s*([\w-]+)\s*-->/);
+      const sliceId = activeFile === '__model' ? null : (idMatch ? idMatch[1] : null);
+      attachCodegenPanel(content, sliceId);
     }
   }
 }
