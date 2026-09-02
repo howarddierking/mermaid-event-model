@@ -31,7 +31,7 @@ jobs:
         run: |
           mkdir -p _site
           # HTML entry points
-          cp index.html model-viewer.html core-playground.html _site/
+          cp index.html model-viewer.html core-playground.html collab-playground.html _site/
           # ES modules (index.js transitively imports the rest)
           cp index.js event-model.js event-model-mermaid.js \
              slice-tests.js slice-tests-mermaid.js _site/
