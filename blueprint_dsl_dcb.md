@@ -63,12 +63,29 @@ eventModel
 	externalEvent weekElapsed["Week Elapsed"] {
 		occurredAt: date
 	}
+	command extendBookingWindow["Extend Booking Window"] {
+		weekOf: date
+	}
+		reads [bookingWindowExtended] by weekOf
+	domainEvent bookingWindowExtended["Booking Window Extended"] {
+		*weekOf: date
+		requiredThrough: date
+	}
+	readModel bookingWindow["Booking Window"] {
+		requiredThrough: date
+	}
+	slice extend_booking_window["Extend Booking Window"]
+		weekElapsed-->extendBookingWindow
+		extendBookingWindow-->bookingWindowExtended
+
+	slice track_booking_window["Track Booking Window"]
+		bookingWindowExtended-->bookingWindow
+
 	readModel horizon["Availability Horizon"] {
 		*roomNumber: int
 		roomType: string
 		capacity: int
 		seededThrough: date
-		requiredThrough: date
 	}
 	automation:System availabilityMaintainer["Availability Maintainer"]
 	command rollAvailability["Roll Availability"] {
@@ -78,7 +95,7 @@ eventModel
 		fromNight: date
 		throughNight: date
 	}
-		reads [availabilityRolled] by roomNumber
+		reads [roomAdded, availabilityRolled] by roomNumber
 	domainEvent availabilityRolled["Availability Rolled"] {
 		*roomNumber: int
 		roomType: string
@@ -89,11 +106,11 @@ eventModel
 	}
 	slice track_availability_horizon["Track Availability Horizon"]
 		roomAdded-->horizon
-		weekElapsed-->horizon
 		availabilityRolled-->horizon
 
 	slice roll_availability["Roll Availability"]
 		horizon-->availabilityMaintainer
+		bookingWindow-->availabilityMaintainer
 		availabilityMaintainer-->rollAvailability
 		rollAvailability-->availabilityRolled
 

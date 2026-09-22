@@ -1,47 +1,29 @@
-# Roll Availability
+# Extend Booking Window
 
-<!-- slice id: roll_availability -->
+<!-- slice id: extend_booking_window -->
 
 ## Model
 
 <!-- Derived from the parent eventModel and refreshed on every spec-slices run. Do not hand-edit. -->
 
-**Pattern:** Automation
+**Pattern:** Translation `[abbreviated]`
 
 ```mermaid
 eventModel
-	actor System
-	readModel bookingWindow["Booking Window"] {
+	externalEvent weekElapsed["Week Elapsed"] {
+		occurredAt: date
+	}
+	command extendBookingWindow["Extend Booking Window"] {
+		weekOf: date
+	}
+		reads [bookingWindowExtended] by weekOf
+	domainEvent bookingWindowExtended["Booking Window Extended"] {
+		*weekOf: date
 		requiredThrough: date
 	}
-	readModel horizon["Availability Horizon"] {
-		*roomNumber: int
-		roomType: string
-		capacity: int
-		seededThrough: date
-	}
-	automation:System availabilityMaintainer["Availability Maintainer"]
-	command rollAvailability["Roll Availability"] {
-		roomNumber: int
-		roomType: string
-		capacity: int
-		fromNight: date
-		throughNight: date
-	}
-		reads [roomAdded, availabilityRolled] by roomNumber
-	domainEvent availabilityRolled["Availability Rolled"] {
-		*roomNumber: int
-		roomType: string
-		capacity: int
-		fromNight: date
-		throughNight: date
-		rolledAt: timestamp
-	}
-	slice roll_availability["Roll Availability"]
-		horizon-->availabilityMaintainer
-		bookingWindow-->availabilityMaintainer
-		availabilityMaintainer-->rollAvailability
-		rollAvailability-->availabilityRolled
+	slice extend_booking_window["Extend Booking Window"]
+		weekElapsed-->extendBookingWindow
+		extendBookingWindow-->bookingWindowExtended
 ```
 
 ## Description

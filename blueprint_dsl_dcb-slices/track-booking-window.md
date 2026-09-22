@@ -1,47 +1,24 @@
-# Roll Availability
+# Track Booking Window
 
-<!-- slice id: roll_availability -->
+<!-- slice id: track_booking_window -->
 
 ## Model
 
 <!-- Derived from the parent eventModel and refreshed on every spec-slices run. Do not hand-edit. -->
 
-**Pattern:** Automation
+**Pattern:** View
 
 ```mermaid
 eventModel
-	actor System
+	domainEvent bookingWindowExtended["Booking Window Extended"] {
+		*weekOf: date
+		requiredThrough: date
+	}
 	readModel bookingWindow["Booking Window"] {
 		requiredThrough: date
 	}
-	readModel horizon["Availability Horizon"] {
-		*roomNumber: int
-		roomType: string
-		capacity: int
-		seededThrough: date
-	}
-	automation:System availabilityMaintainer["Availability Maintainer"]
-	command rollAvailability["Roll Availability"] {
-		roomNumber: int
-		roomType: string
-		capacity: int
-		fromNight: date
-		throughNight: date
-	}
-		reads [roomAdded, availabilityRolled] by roomNumber
-	domainEvent availabilityRolled["Availability Rolled"] {
-		*roomNumber: int
-		roomType: string
-		capacity: int
-		fromNight: date
-		throughNight: date
-		rolledAt: timestamp
-	}
-	slice roll_availability["Roll Availability"]
-		horizon-->availabilityMaintainer
-		bookingWindow-->availabilityMaintainer
-		availabilityMaintainer-->rollAvailability
-		rollAvailability-->availabilityRolled
+	slice track_booking_window["Track Booking Window"]
+		bookingWindowExtended-->bookingWindow
 ```
 
 ## Description

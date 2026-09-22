@@ -16,15 +16,11 @@ eventModel
 		roomType: string
 		capacity: int
 	}
-	externalEvent weekElapsed["Week Elapsed"] {
-		occurredAt: date
-	}
 	readModel horizon["Availability Horizon"] {
 		*roomNumber: int
 		roomType: string
 		capacity: int
 		seededThrough: date
-		requiredThrough: date
 	}
 	domainEvent availabilityRolled["Availability Rolled"] {
 		*roomNumber: int
@@ -36,7 +32,6 @@ eventModel
 	}
 	slice track_availability_horizon["Track Availability Horizon"]
 		roomAdded-->horizon
-		weekElapsed-->horizon
 		availabilityRolled-->horizon
 ```
 
