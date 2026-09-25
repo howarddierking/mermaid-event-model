@@ -27,6 +27,7 @@ eventModel
 		rolledAt: timestamp
 	}
 	ui:Guest booking_ui["Booking Screen"] {
+		email: string
 		roomNumber: int
 		roomType: string
 		capacity: int
