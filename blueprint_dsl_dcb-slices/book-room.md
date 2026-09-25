@@ -98,4 +98,32 @@ sliceTests
 				bookingId: UUID = "bk-002"
 				roomNumber: int = 101
 			}
+
+	test["Rejects a booking whose check-out is the same day as check-in"]
+		given
+			domainEvent["Room Added"] {
+				roomNumber: int = 101
+			}
+		when
+			command["Book Room"] {
+				roomNumber: int = 101
+				checkIn: date = 2026-09-10
+				checkOut: date = 2026-09-10
+			}
+		then
+			error invalid-stay-dates["Check-out must be after check-in"]
+
+	test["Rejects a booking whose check-out is before check-in"]
+		given
+			domainEvent["Room Added"] {
+				roomNumber: int = 101
+			}
+		when
+			command["Book Room"] {
+				roomNumber: int = 101
+				checkIn: date = 2026-09-12
+				checkOut: date = 2026-09-10
+			}
+		then
+			error invalid-stay-dates["Check-out must be after check-in"]
 ```

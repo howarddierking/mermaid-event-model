@@ -49,9 +49,11 @@ eventModel
 
 ## Description
 
-A prospective Guest searches for a room to stay in, giving the criteria that matter to them: the stay dates (`checkIn`/`checkOut`), the `roomType` they want, and the `capacity` they need. The Booking Screen answers with the rooms that satisfy all of it. When nothing satisfies it — including when the requested dates fall outside the window the system has seeded — the screen tells them no rooms are available rather than showing a partial or misleading list.
+A prospective Guest searches for a room to stay in, giving the criteria that matter to them: the stay dates (`checkIn`/`checkOut`), the `roomType` they want, and the `capacity` they need. `roomType` is a room type or `Any`, where `Any` means rooms of any type. The Booking Screen answers with the rooms that satisfy all of it. When nothing satisfies it — including when the requested dates fall outside the window the system has seeded — the screen tells them no rooms are available rather than showing a partial or misleading list.
 
-`Room Availability` is keyed by **(`roomNumber`, `night`)**: one row per room per night, carrying that room's `roomType` and `capacity` alongside `isAvailable`. Availability is a property of a room *on a night*, not of a room, which is why the row is grained this way and why `isAvailable` is meaningful at all. Two events maintain it. `Availability Rolled` seeds the nights for a room across the booking window and trims nights that have fallen into the past; `Room Booked` flips the nights a booking occupies to unavailable. A booking of 10th→12th occupies the nights of the 10th and 11th — **the checkout day is free**, and someone else may arrive that day.
+Two searches are refused as invalid rather than answered: a stay whose `checkOut` is on or before its `checkIn` (a stay is at least one night), and a search with no `roomType`. Neither is an empty result. Nothing failed to match; the question itself is malformed. A blank `roomType` does not mean `Any`. `Any` is an explicit choice, which is why `Add Room` refuses a room type that reads the same.
+
+`Room Availability` is keyed by **(`roomNumber`, `night`)**: one row per room per night, carrying that room's `roomType` and `capacity` alongside `isAvailable`. Availability is a property of a room *on a night*, not of a room, which is why the row is grained this way and why `isAvailable` is meaningful at all. Two events maintain it. `Availability Rolled` seeds a room's nights across `[fromNight, throughNight]`, inclusive at both ends, so the night of `throughNight` is itself available. Each roll also removes that room's nights before `fromNight`, which becomes the new start of the room's calendar; `Room Booked` flips the nights a booking occupies to unavailable. A booking of 10th→12th occupies the nights of the 10th and 11th — **the checkout day is free**, and someone else may arrive that day.
 
 The query rule is the part most easily implemented backwards, so state it plainly:
 
@@ -106,6 +108,7 @@ sliceTests
 			}
 		when
 			ui["Booking Screen"] {
+				roomType: string = "Any"
 				capacity: int = 2
 				checkIn: date = 2026-09-11
 				checkOut: date = 2026-09-13
@@ -128,6 +131,7 @@ sliceTests
 			}
 		when
 			ui["Booking Screen"] {
+				roomType: string = "Any"
 				capacity: int = 2
 				checkIn: date = 2026-09-12
 				checkOut: date = 2026-09-14
@@ -154,6 +158,7 @@ sliceTests
 			}
 		when
 			ui["Booking Screen"] {
+				roomType: string = "Any"
 				capacity: int = 2
 				checkIn: date = 2027-03-01
 				checkOut: date = 2027-03-04
@@ -171,6 +176,7 @@ sliceTests
 			}
 		when
 			ui["Booking Screen"] {
+				roomType: string = "Any"
 				capacity: int = 2
 				checkIn: date = 2027-02-20
 				checkOut: date = 2027-02-24
@@ -188,6 +194,7 @@ sliceTests
 			}
 		when
 			ui["Booking Screen"] {
+				roomType: string = "Any"
 				capacity: int = 2
 				checkIn: date = 2026-08-20
 				checkOut: date = 2026-08-22
@@ -206,6 +213,7 @@ sliceTests
 			}
 		when
 			ui["Booking Screen"] {
+				roomType: string = "Any"
 				capacity: int = 4
 				checkIn: date = 2026-09-10
 				checkOut: date = 2026-09-12
@@ -231,4 +239,171 @@ sliceTests
 			}
 		then
 			none["No rooms match the requested criteria"]
+
+	test["Refuses a search whose check-out is the same day as check-in"]
+		given
+			domainEvent["Availability Rolled"] {
+				roomNumber: int = 101
+				roomType: string = "double"
+				capacity: int = 2
+				fromNight: date = 2026-08-25
+				throughNight: date = 2027-02-21
+			}
+		when
+			ui["Booking Screen"] {
+				roomType: string = "Any"
+				capacity: int = 2
+				checkIn: date = 2026-09-10
+				checkOut: date = 2026-09-10
+			}
+		then
+			error invalid-stay-dates["Check-out must be after check-in"]
+
+	test["Refuses a search whose check-out is before check-in"]
+		given
+			domainEvent["Availability Rolled"] {
+				roomNumber: int = 101
+				roomType: string = "double"
+				capacity: int = 2
+				fromNight: date = 2026-08-25
+				throughNight: date = 2027-02-21
+			}
+		when
+			ui["Booking Screen"] {
+				roomType: string = "Any"
+				capacity: int = 2
+				checkIn: date = 2026-09-12
+				checkOut: date = 2026-09-10
+			}
+		then
+			error invalid-stay-dates["Check-out must be after check-in"]
+
+	test["Offers rooms of every type when the search asks for Any"]
+		given
+			domainEvent["Availability Rolled"] {
+				roomNumber: int = 101
+				roomType: string = "Double"
+				capacity: int = 2
+				fromNight: date = 2026-08-25
+				throughNight: date = 2027-02-21
+			}
+			domainEvent["Availability Rolled"] {
+				roomNumber: int = 201
+				roomType: string = "Suite"
+				capacity: int = 4
+				fromNight: date = 2026-08-25
+				throughNight: date = 2027-02-21
+			}
+		when
+			ui["Booking Screen"] {
+				roomType: string = "Any"
+				capacity: int = 2
+				checkIn: date = 2026-09-10
+				checkOut: date = 2026-09-11
+			}
+		then
+			readModel["Room Availability"] {
+				roomNumber: int = 101
+				night: date = 2026-09-10
+				roomType: string = "Double"
+				isAvailable: boolean = true
+			}
+			readModel["Room Availability"] {
+				roomNumber: int = 201
+				night: date = 2026-09-10
+				roomType: string = "Suite"
+				isAvailable: boolean = true
+			}
+
+	test["Offers only rooms of the named type when the search names one"]
+		given
+			domainEvent["Availability Rolled"] {
+				roomNumber: int = 101
+				roomType: string = "Double"
+				capacity: int = 2
+				fromNight: date = 2026-08-25
+				throughNight: date = 2027-02-21
+			}
+			domainEvent["Availability Rolled"] {
+				roomNumber: int = 201
+				roomType: string = "Suite"
+				capacity: int = 4
+				fromNight: date = 2026-08-25
+				throughNight: date = 2027-02-21
+			}
+		when
+			ui["Booking Screen"] {
+				roomType: string = "Suite"
+				capacity: int = 2
+				checkIn: date = 2026-09-10
+				checkOut: date = 2026-09-11
+			}
+		then
+			readModel["Room Availability"] {
+				roomNumber: int = 201
+				night: date = 2026-09-10
+				roomType: string = "Suite"
+				isAvailable: boolean = true
+			}
+
+	test["Refuses a search with no room type"]
+		when
+			ui["Booking Screen"] {
+				capacity: int = 2
+				checkIn: date = 2026-09-10
+				checkOut: date = 2026-09-12
+			}
+		then
+			error room-type-required["Choose a room type, or Any"]
+
+	test["Offers a room for a stay whose last night is the rolled throughNight"]
+		given
+			domainEvent["Availability Rolled"] {
+				roomNumber: int = 101
+				capacity: int = 2
+				fromNight: date = 2026-08-25
+				throughNight: date = 2027-02-21
+			}
+		when
+			ui["Booking Screen"] {
+				roomType: string = "Any"
+				capacity: int = 2
+				checkIn: date = 2027-02-20
+				checkOut: date = 2027-02-22
+			}
+		then
+			readModel["Room Availability"] {
+				roomNumber: int = 101
+				night: date = 2027-02-20
+				isAvailable: boolean = true
+			}
+			readModel["Room Availability"] {
+				roomNumber: int = 101
+				night: date = 2027-02-21
+				isAvailable: boolean = true
+			}
+
+	test["Offers nothing for nights a later roll moved the calendar past"]
+		given
+			domainEvent["Availability Rolled"] {
+				roomNumber: int = 101
+				capacity: int = 2
+				fromNight: date = 2026-08-25
+				throughNight: date = 2027-02-21
+			}
+			domainEvent["Availability Rolled"] {
+				roomNumber: int = 101
+				capacity: int = 2
+				fromNight: date = 2026-09-01
+				throughNight: date = 2027-02-28
+			}
+		when
+			ui["Booking Screen"] {
+				roomType: string = "Any"
+				capacity: int = 2
+				checkIn: date = 2026-08-26
+				checkOut: date = 2026-08-28
+			}
+		then
+			none["No rooms match the requested dates"]
 ```
