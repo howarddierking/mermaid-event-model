@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Event Model — Live Collaboration Playground</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 20px; max-width: 1600px; }
+  h1 { margin-top: 0; }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 8px 0; font-size: 13px; }
+  .bar input[type=text] { font: inherit; padding: 5px 8px; border: 1px solid #d1d5db; border-radius: 6px; min-width: 220px; }
+  button { padding: 6px 14px; font-size: 14px; }
+  .status { display: inline-flex; align-items: center; gap: 6px; color: #374151; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #9ca3af; display: inline-block; }
+  .dot.connected { background: #16a34a; }
+  .dot.connecting { background: #d97706; }
+  .peers { display: flex; gap: 6px; flex-wrap: wrap; }
+  .peer { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px;
+          background: #f3f4f6; font-size: 12px; }
+  .peer .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .cols { display: flex; gap: 16px; align-items: flex-start; }
+  .cols > div { flex: 1; min-width: 0; }
+  #editor { border: 1px solid #ddd; border-radius: 6px; overflow: hidden; }
+  #editor .cm-editor { height: 420px; font-size: 12px; }
+  #diagram { border: 1px solid #ddd; padding: 10px; overflow: auto; background: #fafafa; min-height: 420px; }
+  #diagram svg { display: block; }
+  .error { color: #b00; white-space: pre-wrap; font-family: ui-monospace, monospace; }
+  label.field { font-weight: 600; font-size: 13px; display: block; margin: 8px 0 4px; }
+  .hint { color: #6b7280; font-size: 12px; }
+  /* remote-cursor styling from y-codemirror.next */
+  .cm-ySelectionCaret { position: relative; border-left: 2px solid; margin-left: -1px; box-sizing: border-box; }
+  .cm-ySelectionCaretDot { display: none; }
+  .cm-ySelectionInfo { position: absolute; top: -1.4em; left: -2px; font-size: 10px; font-family: system-ui, sans-serif;
+    color: #fff; padding: 1px 4px; border-radius: 3px 3px 3px 0; white-space: nowrap; user-select: none; opacity: 0.9; }
+</style>
+<!--
+  Single-yjs-instance rule: y-webrtc and y-codemirror.next both depend on "yjs".
+  If the browser loads two copies of Yjs the CRDT silently breaks. jsDelivr's
+  +esm bundles hard-pin their peer imports to absolute versioned URLs, which an
+  import map cannot intercept — so two Yjs copies would load. We use esm.sh with
+  ?external=yjs,@codemirror/... instead: those bundles then import the peers as
+  *bare* specifiers, which this import map resolves to a single canonical copy.
+  All ESM, no build step — same spirit as the other playgrounds' CDN imports.
+-->
+<script type="importmap">
+{
+  "imports": {
+    "d3": "https://cdn.jsdelivr.net/npm/d3@7/+esm",
+    "yjs": "https://esm.sh/yjs@13.6.20",
+    "y-protocols/awareness": "https://esm.sh/y-protocols@1.0.6/awareness?external=yjs",
+    "y-protocols/sync": "https://esm.sh/y-protocols@1.0.6/sync?external=yjs",
+    "y-webrtc": "https://esm.sh/y-webrtc@10.3.0?external=yjs,y-protocols",
+    "y-codemirror.next": "https://esm.sh/y-codemirror.next@0.3.5?external=yjs,y-protocols,@codemirror/state,@codemirror/view",
+    "@codemirror/state": "https://esm.sh/@codemirror/state@6.4.1",
+    "@codemirror/view": "https://esm.sh/@codemirror/view@6.34.1?external=@codemirror/state",
+    "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.7.1?external=@codemirror/state,@codemirror/view"
+  }
+}
+</script>
+</head>
+<body>
+<h1>Event Model — Live Collaboration Playground</h1>
+<p>Edit the DSL together in real time. Changes sync peer-to-peer over WebRTC
+using a <a href="https://yjs.dev">Yjs</a> CRDT — no server holds your document.
+Share the URL (it carries the room id) and anyone who opens it joins the same
+session. The diagram re-renders live from the shared text.</p>
+
+<div class="bar">
+  <span class="status"><span id="dot" class="dot connecting"></span><span id="statusText">connecting…</span></span>
+  <span>Room:</span>
+  <input type="text" id="room" readonly>
+  <button id="copyLink">Copy share link</button>
+  <button id="newRoom">New room</button>
+  <label class="field" for="name" style="margin:0">You:</label>
+  <input type="text" id="name" style="min-width:120px" maxlength="24">
+  <span class="peers" id="peers"></span>
+</div>
+<p class="hint">Peer-to-peer via public y-webrtc signaling servers. If peers can't
+connect (restrictive NAT/firewall), the document still works locally and syncs
+when a route opens. Persists to this browser via IndexedDB is <em>not</em> enabled — closing all peers loses unsynced state.</p>
+
+<div class="cols">
+  <div>
+    <label class="field">Shared DSL</label>
+    <div id="editor"></div>
+  </div>
+  <div>
+    <label class="field">Diagram</label>
+    <div id="diagram"></div>
+  </div>
+</div>
+
+<script type="module">
+  import * as Y from 'yjs';
+  import { WebrtcProvider } from 'y-webrtc';
+  import { EditorState } from '@codemirror/state';
+  import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
+  import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+  import { yCollab } from 'y-codemirror.next';
+  import { renderEventModel } from './event-model.js';
+
+  // A small starter model so an empty room isn't blank. Only the first peer to
+  // reach an empty doc seeds it (guarded below) so we don't clobber live text.
+  const SEED = `eventModel
+\tactor Guest
+\taggregate Booking
+\tui:Guest booking_ui["Booking Screen"]
+\tcommand bookRoom["Book Room"]
+\tdomainEvent:Booking booked["Room Booked"]
+\treadModel avail["Availability"]
+
+\tbooking_ui-->bookRoom
+\tbookRoom-->booked
+\tbooked-->avail
+`;
+
+  // ── Room id: from the URL hash so the link is shareable; generate one if absent.
+  function currentRoom() {
+    const h = (location.hash || '').replace(/^#/, '').trim();
+    return h || null;
+  }
+  function randomRoom() {
+    return 'em-' + Math.random().toString(36).slice(2, 10);
+  }
+  let room = currentRoom();
+  if (!room) { room = randomRoom(); location.hash = room; }
+
+  // ── A stable-ish identity + colour for awareness (who's editing).
+  const COLORS = ['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#3b82f6','#8b5cf6','#ec4899'];
+  const myColor = COLORS[Math.floor(Math.random() * COLORS.length)];
+  let myName = localStorage.getItem('collab-name') || ('user-' + Math.random().toString(36).slice(2, 6));
+
+  // ── Yjs document + shared text + WebRTC provider.
+  const ydoc = new Y.Doc();
+  const ytext = ydoc.getText('dsl');
+  const provider = new WebrtcProvider(room, ydoc, {
+    // Public signaling servers (discovery only; document data is P2P/encrypted).
+    signaling: [
+      'wss://signaling.yjs.dev',
+      'wss://y-webrtc-signaling-eu.herokuapp.com',
+      'wss://y-webrtc-signaling-us.herokuapp.com',
+    ],
+  });
+  const awareness = provider.awareness;
+  awareness.setLocalStateField('user', { name: myName, color: myColor });
+
+  // Seed the doc once, only if we're the first and it's genuinely empty. Wait a
+  // beat for an initial sync so we don't overwrite an existing room's content.
+  provider.on('synced', seedIfEmpty);
+  setTimeout(seedIfEmpty, 1500);
+  let seeded = false;
+  function seedIfEmpty() {
+    if (seeded) return;
+    if (ytext.length === 0 && awareness.getStates().size <= 1) {
+      ydoc.transact(() => ytext.insert(0, SEED));
+    }
+    seeded = true;
+  }
+
+  // ── CodeMirror 6 editor bound to the Y.Text (two-way, conflict-free).
+  const diagramEl = document.getElementById('diagram');
+  const state = EditorState.create({
+    doc: ytext.toString(),
+    extensions: [
+      lineNumbers(),
+      highlightActiveLine(),
+      history(),
+      keymap.of([...defaultKeymap, ...historyKeymap]),
+      EditorView.theme({ '&': { fontFamily: 'ui-monospace, monospace' } }),
+      yCollab(ytext, awareness), // binds text + renders remote cursors/selections
+      EditorView.updateListener.of((v) => { if (v.docChanged) scheduleRender(); }),
+    ],
+  });
+  const view = new EditorView({ state, parent: document.getElementById('editor') });
+
+  // ── Live diagram render (debounced) off the shared text.
+  let renderTimer = null;
+  function scheduleRender() {
+    clearTimeout(renderTimer);
+    renderTimer = setTimeout(render, 150);
+  }
+  function render() {
+    try {
+      renderEventModel(view.state.doc.toString(), diagramEl);
+    } catch (err) {
+      diagramEl.innerHTML = '<div class="error">' + String(err && err.stack || err) + '</div>';
+    }
+  }
+  render();
+
+  // ── Connection status.
+  const dot = document.getElementById('dot');
+  const statusText = document.getElementById('statusText');
+  provider.on('status', ({ connected }) => {
+    dot.className = 'dot ' + (connected ? 'connected' : 'connecting');
+    statusText.textContent = connected ? 'connected' : 'connecting…';
+  });
+  // y-webrtc emits 'peers' as peers come and go.
+  provider.on('peers', () => { dot.className = 'dot connected'; statusText.textContent = 'connected'; });
+
+  // ── Presence list (who's here), driven by awareness.
+  const peersEl = document.getElementById('peers');
+  function renderPeers() {
+    const states = [...awareness.getStates().entries()];
+    peersEl.innerHTML = '';
+    for (const [clientId, st] of states) {
+      const u = (st && st.user) || {};
+      const chip = document.createElement('span');
+      chip.className = 'peer';
+      const isMe = clientId === ydoc.clientID;
+      chip.innerHTML = '<span class="swatch" style="background:' + (u.color || '#999') + '"></span>' +
+        (u.name || 'anon') + (isMe ? ' (you)' : '');
+      peersEl.appendChild(chip);
+    }
+  }
+  awareness.on('change', renderPeers);
+  renderPeers();
+
+  // ── Toolbar wiring.
+  const roomInput = document.getElementById('room');
+  roomInput.value = room;
+  const nameInput = document.getElementById('name');
+  nameInput.value = myName;
+  nameInput.addEventListener('input', () => {
+    myName = nameInput.value || 'anon';
+    localStorage.setItem('collab-name', myName);
+    awareness.setLocalStateField('user', { name: myName, color: myColor });
+  });
+  document.getElementById('copyLink').addEventListener('click', async () => {
+    const url = location.origin + location.pathname + '#' + room;
+    try { await navigator.clipboard.writeText(url); } catch (_) {}
+    const b = document.getElementById('copyLink');
+    const t = b.textContent; b.textContent = 'Copied!';
+    setTimeout(() => { b.textContent = t; }, 1200);
+  });
+  document.getElementById('newRoom').addEventListener('click', () => {
+    location.hash = randomRoom();
+    location.reload();
+  });
+
+  // Clean disconnect so peers see us leave promptly.
+  window.addEventListener('beforeunload', () => provider.destroy());
+</script>
+</body>
+</html>
