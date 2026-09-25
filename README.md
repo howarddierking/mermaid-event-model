@@ -416,6 +416,12 @@ Each skill accepts an optional target path; they default to `blueprint_dsl.md`.
 
 The plugin skills live at [`skills/`](skills/) and the manifest at [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json). The top-level `.claude/skills/` is a symlink to `skills/` so the skills also work as project-scoped slash commands while editing this repo (without the `mermaid-event-model:` namespace prefix).
 
+## Bindings
+
+A binding turns an Event Model into running software for a particular stack: language, framework, and infrastructure. Bindings live in their own repositories, never in this one. Each takes the DSL (and the slice specs derived from it) as input and produces software as output, so the DSL is the only contract between a model and whatever implements it. Keeping bindings separate means no binding can quietly shape the DSL.
+
+No bindings exist yet. If you build one, open an issue or PR to have it listed here.
+
 ## Files
 
 - `model-viewer.html` — canonical demo: renders a model `.md` plus the linked `<model>-slices/` directory, with sidebar navigation.
